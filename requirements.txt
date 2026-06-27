@@ -9,3 +9,7 @@ yfinance>=0.2.40
 plotly>=5.20
 streamlit>=1.33
 statsmodels>=0.14
+
+# Terminal backend (React frontend lives in web/ with its own package.json)
+fastapi>=0.110
+uvicorn[standard]>=0.29

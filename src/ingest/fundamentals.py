@@ -1,0 +1,65 @@
+"""Pull company fundamentals from yfinance into the `fundamentals` table.
+
+Captures the richer fields the redesigned UI needs and that we don't compute
+ourselves: GICS/Yahoo sector, P/E (forward, falling back to trailing),
+price/book, market cap, 52-week range, and a business summary. Dividend yield
+is computed from our own dividends table elsewhere, not taken from here.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import sqlite3
+
+import yfinance as yf
+
+from src.config import db_path
+from src.ingest.providers import to_yf
+from src.model import schema
+
+
+def _f(v) -> float | None:
+    try:
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _info(ticker: str) -> dict:
+    try:
+        return yf.Ticker(to_yf(ticker)).info or {}
+    except Exception:
+        return {}
+
+
+def pull_fundamentals(cfg: dict, conn: sqlite3.Connection | None = None,
+                      tickers: list[str] | None = None) -> dict:
+    own = conn is None
+    if own:
+        conn = schema.get_connection(db_path(cfg))
+    schema.create_schema(conn)
+    if tickers is None:
+        tickers = [r[0] for r in conn.execute(
+            "SELECT ticker FROM securities WHERE sec_type != 'cash'")]
+
+    today = dt.date.today().isoformat()
+    summary = {"updated": 0, "failed": []}
+    for t in tickers:
+        info = _info(t)
+        if not info:
+            summary["failed"].append(t)
+            continue
+        conn.execute(
+            "INSERT OR REPLACE INTO fundamentals"
+            " (ticker, gics_sector, pe, pb, market_cap, week52_low, week52_high,"
+            "  description, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (t, info.get("sector"),
+             _f(info.get("forwardPE") or info.get("trailingPE")),
+             _f(info.get("priceToBook")), _f(info.get("marketCap")),
+             _f(info.get("fiftyTwoWeekLow")), _f(info.get("fiftyTwoWeekHigh")),
+             (info.get("longBusinessSummary") or "")[:600], today),
+        )
+        summary["updated"] += 1
+    conn.commit()
+    if own:
+        conn.close()
+    return summary

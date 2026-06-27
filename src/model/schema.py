@@ -86,10 +86,23 @@ CREATE TABLE IF NOT EXISTS import_meta (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS fundamentals (
+    ticker       TEXT PRIMARY KEY,
+    gics_sector  TEXT,
+    pe           REAL,   -- forward P/E (falls back to trailing)
+    pb           REAL,   -- price / book
+    market_cap   REAL,   -- USD
+    week52_low   REAL,
+    week52_high  REAL,
+    description  TEXT,
+    updated      TEXT,
+    FOREIGN KEY (ticker) REFERENCES securities (ticker)
+);
 """
 
 _TABLES = [
-    "import_meta", "nav_history", "benchmarks", "dividends",
+    "import_meta", "fundamentals", "nav_history", "benchmarks", "dividends",
     "prices", "transactions", "holdings", "securities",
 ]
 
