@@ -1,0 +1,10 @@
+# UOIG dark theme — brand palette: green #004f27, gold #ffc000, grey #5f5f62
+[theme]
+base = "dark"
+primaryColor = "#ffc000"            # gold: interactive accents (legible on near-black)
+backgroundColor = "#0e0f10"         # near-black canvas
+secondaryBackgroundColor = "#16181a" # raised surfaces (sidebar, cards)
+textColor = "#e9e9ec"
+
+[server]
+headless = true

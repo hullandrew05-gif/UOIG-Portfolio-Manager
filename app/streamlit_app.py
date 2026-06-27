@@ -1,17 +1,21 @@
 """UOIG Portfolio Manager — Streamlit dashboard (Phase 1: live prices & P&L).
 
-Run:  streamlit run app/streamlit_app.py
+Run:  python -m streamlit run app/streamlit_app.py
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+APP_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(APP_DIR.parent))  # project root (for `src`)
+sys.path.insert(0, str(APP_DIR))         # app dir (for `theme`)
 
 import altair as alt  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
+
+from theme import PALETTE, brand_header, inject_theme  # noqa: E402
 
 from src.config import db_path, load_config  # noqa: E402
 from src.analytics.pnl import load_positions  # noqa: E402
@@ -19,6 +23,7 @@ from src.ingest.refresh import refresh  # noqa: E402
 from src.model.schema import get_connection  # noqa: E402
 
 st.set_page_config(page_title="UOIG Portfolio Manager", page_icon="📈", layout="wide")
+inject_theme()
 CFG = load_config()
 
 
@@ -37,8 +42,7 @@ def last_refresh() -> str:
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────
-st.sidebar.title("📈 UOIG")
-st.sidebar.caption("Portfolio Manager")
+st.sidebar.header("Controls")
 
 if st.sidebar.button("↻ Refresh prices", width="stretch"):
     with st.spinner("Pulling latest market data…"):
@@ -57,7 +61,8 @@ sector = st.sidebar.selectbox("Sector", sectors)
 if sector != "All":
     view = view[view["sector"] == sector]
 
-# ── KPIs ───────────────────────────────────────────────────────────────────
+# ── Header + KPIs ──────────────────────────────────────────────────────────
+brand_header()
 st.title("Portfolio Overview")
 
 aum = view["market_value"].sum()
@@ -75,8 +80,7 @@ k[1].metric("Day change", f"${day:,.0f}", f"{day_pct:+.2%}")
 k[2].metric("Active unrealized P&L", f"${unreal:,.0f}", f"{unreal_pct:+.1%}")
 k[3].metric("Positions", f"{len(view)}")
 st.caption("Unrealized P&L covers the active stock sleeve (index overlay & cash "
-           "have no cost basis in the source data; total-fund return arrives with "
-           "TWR in Phase 2).")
+           "have no cost basis in the source data).")
 
 # ── Sector active weight ───────────────────────────────────────────────────
 if not stocks.empty:
@@ -84,14 +88,14 @@ if not stocks.empty:
     sec_aw = stocks.groupby("sector")["active_w"].sum().reset_index(name="active_w")
     chart = (
         alt.Chart(sec_aw)
-        .mark_bar()
+        .mark_bar(cornerRadiusEnd=3, height=20)
         .encode(
-            x=alt.X("active_w:Q", title="Active weight", axis=alt.Axis(format="+.1%")),
+            x=alt.X("active_w:Q", title="Active weight", axis=alt.Axis(format="+.0%")),
             y=alt.Y("sector:N", sort="-x", title=None),
             color=alt.condition(
                 "datum.active_w >= 0",
-                alt.value("#1e8449"),   # overweight = green
-                alt.value("#c0392b"),   # underweight = red
+                alt.value(PALETTE["green_bright"]),  # overweight
+                alt.value(PALETTE["gold"]),          # underweight
             ),
             tooltip=[
                 alt.Tooltip("sector:N", title="Sector"),
@@ -107,25 +111,35 @@ st.subheader("Holdings")
 cols = ["fund", "ticker", "name", "sector", "cap_class", "shares", "entry_price",
         "price", "day_chg_pct", "market_value", "port_w", "active_w",
         "unreal_pnl", "unreal_pnl_pct", "total_ret_pct"]
-table = view[cols].sort_values("market_value", ascending=False)
-
-fmt = {
-    "shares": "{:,.1f}", "entry_price": "${:,.2f}", "price": "${:,.2f}",
-    "day_chg_pct": "{:+.2%}", "market_value": "${:,.0f}",
-    "port_w": "{:.2%}", "active_w": "{:+.2%}",
-    "unreal_pnl": "${:,.0f}", "unreal_pnl_pct": "{:+.1%}", "total_ret_pct": "{:+.1%}",
+labels = {
+    "fund": "Fund", "ticker": "Ticker", "name": "Name", "sector": "Sector",
+    "cap_class": "Cap", "shares": "Shares", "entry_price": "Entry", "price": "Price",
+    "day_chg_pct": "Day %", "market_value": "Mkt Value", "port_w": "Port Wt",
+    "active_w": "Active Wt", "unreal_pnl": "Unreal P&L", "unreal_pnl_pct": "Unreal %",
+    "total_ret_pct": "Total Ret",
 }
+specs = {
+    "shares": "{:,.1f}", "entry_price": "${:,.2f}", "price": "${:,.2f}",
+    "day_chg_pct": "{:+.2%}", "market_value": "${:,.0f}", "port_w": "{:.2%}",
+    "active_w": "{:+.2%}", "unreal_pnl": "${:,.0f}", "unreal_pnl_pct": "{:+.1%}",
+    "total_ret_pct": "{:+.1%}",
+}
+table = view[cols].sort_values("market_value", ascending=False).rename(columns=labels)
+
+
+def _na_safe(spec):
+    return lambda v: "—" if pd.isna(v) else spec.format(v)
 
 
 def _sign_color(v):
     if pd.isna(v):
         return ""
-    return "color:#c0392b" if v < 0 else "color:#1e8449"
+    return f"color:{PALETTE['neg']}" if v < 0 else f"color:{PALETTE['pos']}"
 
 
-styler = (table.style
-          .format(fmt, na_rep="—")
-          .map(_sign_color, subset=["day_chg_pct", "unreal_pnl", "unreal_pnl_pct", "total_ret_pct"]))
+fmt = {labels[k]: _na_safe(s) for k, s in specs.items()}
+color_cols = [labels[c] for c in ("day_chg_pct", "unreal_pnl", "unreal_pnl_pct", "total_ret_pct")]
+styler = table.style.format(fmt).map(_sign_color, subset=color_cols)
 st.dataframe(styler, width="stretch", hide_index=True, height=560)
 
 st.caption("Prices via yfinance (end-of-day). Total return includes dividends "
