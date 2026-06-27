@@ -6,10 +6,9 @@ market data, P&L, returns, risk, and attribution. Replaces the manual
 
 See [`DESIGN.md`](DESIGN.md) for the full architecture and build plan.
 
-> **Status: Phase 1 complete** — live prices, P&L, and a Streamlit dashboard.
-> The workbook imports into a clean SQLite store that reconciles to the cent,
-> yfinance feeds end-of-day prices + dividends, and the dashboard shows market
-> value, P&L, total return, and weights live.
+> **Status: Phase 2 complete** — live prices, P&L, holding-period returns, and
+> 3-year daily beta. The DB reconciles to the source sheet to the cent; the
+> dashboard serves Holdings / Performance / Risk tabs in a dark UOIG-branded UI.
 
 ## Quickstart
 
@@ -66,8 +65,8 @@ tests/                   reconcile + P&L guarantees
 |---|---|---|
 | 0 Foundation | done | Schema, importer, reconciliation |
 | 1 Live prices & P&L | done | yfinance feed, market value, unrealized P&L, Holdings dashboard |
-| 2 Returns & NAV | | TWR, since-inception, benchmark-relative |
-| 3 Risk | | Beta, vol, Sharpe, tracking error, active share |
+| 2 Returns | done | Holding-period returns (incl. divs), benchmark-relative, Performance tab |
+| 3 Risk | done | 3-yr daily beta vs Russell, vol, R², Risk tab |
 | 4 Attribution | | Brinson allocation vs selection; analyst scorecard |
 | 5 Automation & handoff | | GitHub Actions refresh, Streamlit Cloud deploy, runbook |
 

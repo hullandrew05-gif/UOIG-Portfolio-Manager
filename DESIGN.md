@@ -206,8 +206,8 @@ updated DB/NAV snapshot — fully automated; README runbook for handoff.
 |---|---|---|
 | **0. Foundation** ✅ | Schema + `import_xlsx` seeds holdings (clean cash/index/total, normalize sectors, capture entry price+date), SQLite stood up; reconciles to the cent | **Done** — clean data model |
 | **1. Live prices & P&L** ✅ | yfinance adapter, daily price pull, MV + unrealized P&L + weights, Holdings page | **Done** — replaces the Google Sheet |
-| **2. Returns** | Holding-period return (incl. divs) per position/sector/fund, benchmark-relative, Performance page | Performance from current book |
-| **3. Risk** | Beta (SPY + IWV/IWM), vol, Sharpe, tracking error, active share, Risk page | Institutional risk view |
+| **2. Returns** ✅ | Holding-period return (incl. divs) per position/sector/fund, benchmark-relative, Performance tab | **Done** — performance from current book |
+| **3. Risk** ◐ | **Done:** 3-yr daily beta (per name + fund) vs IWV/IWM, R², annualized vol, Risk tab. **Remaining:** Sharpe, tracking error, active-share % | Institutional risk view |
 | **4. Attribution & scorecard** | Brinson sector attribution, analyst scorecard, contribution analysis | IC-meeting-ready |
 | **5. Automation & handoff** | GitHub Actions nightly refresh, deploy to Streamlit Cloud, transaction-logging UI, README/runbook | Set-and-forget + survives graduations |
 
