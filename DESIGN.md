@@ -137,15 +137,17 @@ Holdings can eventually be **derived** from `transactions`; until full history e
 **Aggregations** — by sector, cap class, and fund: MV, weights, active weight, P&L,
 and contribution to return = `Σ(weightᵢ × returnᵢ)`.
 
-**Fund returns**
-- **Time-Weighted Return (TWR)** — headline performance number, immune to member
-  contribution timing; chained from `nav_history` broken at cash-flow dates
-- **Money-Weighted Return (IRR)** — optional, captures flow timing
-- Cumulative since-inception, YTD/QTD/1Y; benchmark-relative excess return
+**Fund returns** _(from the current book — see deferred note)_
+- **Holding-period return** per position, sector, and fund — price + dividends since
+  entry date; computable from current holdings without any transaction history
+- **Benchmark-relative** — holding-period excess return vs each fund's index (IWV/IWM)
+- _Deferred:_ time-weighted return / since-inception NAV needs the Charles Schwab
+  transaction history (not yet available). The `nav_history` schema is ready for when it is.
 
 **Risk**
-- **Beta** — regress fund returns on benchmark (default 2-yr weekly vs **SPY**, also vs
-  each fund's index IWV/IWM); per-name betas → portfolio beta = `Σ(weight × beta)` cross-check
+- **Beta** — **3-year daily**, each fund regressed on its OWN benchmark (Tall Firs vs
+  IWV / Russell 3000, Alumni vs IWM / Russell 2000); per-name betas → portfolio beta =
+  `Σ(weight × beta)` cross-check
 - **Volatility** (annualized), **Sharpe** (rf from BIL/^IRX), **tracking error**,
   **max drawdown**, **R² / correlation**
 - **Active share** = `½ Σ|portfolio_weightᵢ − benchmark_weightᵢ|`
@@ -204,7 +206,7 @@ updated DB/NAV snapshot — fully automated; README runbook for handoff.
 |---|---|---|
 | **0. Foundation** ✅ | Schema + `import_xlsx` seeds holdings (clean cash/index/total, normalize sectors, capture entry price+date), SQLite stood up; reconciles to the cent | **Done** — clean data model |
 | **1. Live prices & P&L** ✅ | yfinance adapter, daily price pull, MV + unrealized P&L + weights, Holdings page | **Done** — replaces the Google Sheet |
-| **2. Returns & NAV** | NAV history, TWR/period/since-inception, benchmark-relative, Performance page | Real performance reporting |
+| **2. Returns** | Holding-period return (incl. divs) per position/sector/fund, benchmark-relative, Performance page | Performance from current book |
 | **3. Risk** | Beta (SPY + IWV/IWM), vol, Sharpe, tracking error, active share, Risk page | Institutional risk view |
 | **4. Attribution & scorecard** | Brinson sector attribution, analyst scorecard, contribution analysis | IC-meeting-ready |
 | **5. Automation & handoff** | GitHub Actions nightly refresh, deploy to Streamlit Cloud, transaction-logging UI, README/runbook | Set-and-forget + survives graduations |
@@ -215,7 +217,7 @@ updated DB/NAV snapshot — fully automated; README runbook for handoff.
 
 - Provider **yfinance** to start; interface allows Tiingo/FMP later
 - Cadence **EOD daily** (GitHub Action) + manual refresh
-- Beta **2-yr weekly vs SPY**, also vs each fund's index; rf from BIL/^IRX
+- Beta **3-yr daily**, each fund vs its own index (Tall Firs→IWV, Alumni→IWM); rf from BIL
 - Storage **SQLite**
 - Returns **include dividends** (total return)
 
@@ -230,4 +232,6 @@ updated DB/NAV snapshot — fully automated; README runbook for handoff.
 3. **Style benchmarks** — sheet uses IWV (Russell 3000) and IWM (Russell 2000).
    You described the funds as "value" and "growth" — do you want style benchmarks
    (e.g. IWD/IWF or IVE/IVW) instead of/alongside these? Which fund is which style?
-4. **Inception date** — what start date should "since inception" returns use per fund?
+4. **Transaction history (Charles Schwab)** — once accessible, unlocks true TWR /
+   since-inception NAV. Until then, returns are holding-period from current positions
+   (each name's entry date → today).

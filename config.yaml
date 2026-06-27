@@ -16,7 +16,10 @@ market_data:
   provider: "yfinance"        # swappable adapter (Phase 1): yfinance | tiingo | fmp
 
 risk:
-  beta_window_years: 2
-  beta_frequency: "weekly"    # daily | weekly | monthly
-  market_proxy: "SPY"         # broad-market beta reference (alongside each fund's index)
+  beta_window_years: 3
+  beta_frequency: "daily"     # daily | weekly | monthly
   risk_free: "BIL"            # T-bill ETF proxy for Sharpe
+  market_proxy: "SPY"         # secondary broad-market reference (optional)
+  # Each fund's beta is measured against its OWN benchmark:
+  #   Tall Firs   -> IWV (Russell 3000)
+  #   Alumni Fund -> IWM (Russell 2000)
