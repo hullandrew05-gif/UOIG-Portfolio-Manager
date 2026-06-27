@@ -1,0 +1,11 @@
+# Phase 0 (data foundation)
+openpyxl>=3.1
+pandas>=2.0
+numpy>=1.26
+pyyaml>=6.0
+
+# Phase 1+ (live data, dashboard, analytics) — installed as we get there
+yfinance>=0.2.40
+plotly>=5.20
+streamlit>=1.33
+statsmodels>=0.14

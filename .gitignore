@@ -1,0 +1,15 @@
+# Data artifacts (reproducible from the source workbook via scripts/seed_db.py)
+data/*.db
+data/*.sqlite
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db

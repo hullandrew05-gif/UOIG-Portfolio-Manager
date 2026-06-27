@@ -1,0 +1,22 @@
+# UOIG Portfolio Manager — configuration
+# Single source of truth for funds, benchmarks, and analytics parameters.
+
+source_workbook: "Portfolio Holdings.xlsx"   # legacy Google-Sheet export used to seed the DB
+database: "data/portfolio.db"                 # SQLite store (reproducible from the workbook)
+
+funds:
+  - name: "Tall Firs"
+    sheet: "Tall Firs"
+    benchmark: "IWV"          # iShares Russell 3000 ETF (large/mid-cap core)
+  - name: "Alumni Fund"
+    sheet: "Alumni Fund"
+    benchmark: "IWM"          # iShares Russell 2000 ETF (small/mid-cap)
+
+market_data:
+  provider: "yfinance"        # swappable adapter (Phase 1): yfinance | tiingo | fmp
+
+risk:
+  beta_window_years: 2
+  beta_frequency: "weekly"    # daily | weekly | monthly
+  market_proxy: "SPY"         # broad-market beta reference (alongside each fund's index)
+  risk_free: "BIL"            # T-bill ETF proxy for Sharpe
