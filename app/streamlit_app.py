@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import altair as alt  # noqa: E402
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
@@ -80,8 +81,26 @@ st.caption("Unrealized P&L covers the active stock sleeve (index overlay & cash 
 # ── Sector active weight ───────────────────────────────────────────────────
 if not stocks.empty:
     st.subheader("Sector active weight (vs. benchmark)")
-    sec_aw = stocks.groupby("sector")["active_w"].sum().sort_values()
-    st.bar_chart(sec_aw, horizontal=True, color="#154733")  # Oregon green
+    sec_aw = stocks.groupby("sector")["active_w"].sum().reset_index(name="active_w")
+    chart = (
+        alt.Chart(sec_aw)
+        .mark_bar()
+        .encode(
+            x=alt.X("active_w:Q", title="Active weight", axis=alt.Axis(format="+.1%")),
+            y=alt.Y("sector:N", sort="-x", title=None),
+            color=alt.condition(
+                "datum.active_w >= 0",
+                alt.value("#1e8449"),   # overweight = green
+                alt.value("#c0392b"),   # underweight = red
+            ),
+            tooltip=[
+                alt.Tooltip("sector:N", title="Sector"),
+                alt.Tooltip("active_w:Q", title="Active weight", format="+.2%"),
+            ],
+        )
+        .properties(height=260)
+    )
+    st.altair_chart(chart, width="stretch")
 
 # ── Holdings table ─────────────────────────────────────────────────────────
 st.subheader("Holdings")
