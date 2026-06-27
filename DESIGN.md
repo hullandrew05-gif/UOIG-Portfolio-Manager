@@ -3,7 +3,11 @@
 A dashboard + analytics tool to track the **Tall Firs** and **Alumni Fund** portfolios,
 pull live market data, and compute P&L, returns, risk, and attribution.
 
-_Status: design / planning. Last updated by the design session._
+_Status: built. The dashboard was later rebuilt as a pixel-faithful React
+terminal (`web/`) on a FastAPI backend (`api/`) serving the existing analytics;
+the Streamlit app described below has been retired. Single-container deploy via
+`Dockerfile`. See `README.md` for the runbook. Future: live Ask-Claude, then
+migrate frontend → Vercel and DB → Supabase (Postgres)._
 
 ---
 

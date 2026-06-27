@@ -1,15 +1,10 @@
-# Phase 0 (data foundation)
-openpyxl>=3.1
+# Data + analytics
+openpyxl>=3.1          # read the source workbook (seed only)
 pandas>=2.0
 numpy>=1.26
 pyyaml>=6.0
+yfinance>=0.2.40       # market data: prices, dividends, fundamentals
 
-# Phase 1+ (live data, dashboard, analytics) — installed as we get there
-yfinance>=0.2.40
-plotly>=5.20
-streamlit>=1.33
-statsmodels>=0.14
-
-# Terminal backend (React frontend lives in web/ with its own package.json)
+# API backend (serves the React terminal in web/)
 fastapi>=0.110
 uvicorn[standard]>=0.29

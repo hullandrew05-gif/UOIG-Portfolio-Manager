@@ -1,0 +1,17 @@
+.git
+**/__pycache__
+*.pyc
+.venv
+venv
+.pytest_cache
+web/node_modules
+web/dist
+Dashboard/
+University endowment portfolio tool/
+*.key
+*.key.txt
+*.pem
+data/*.db-wal
+data/*.db-shm
+.streamlit
+tests

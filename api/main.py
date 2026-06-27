@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import FastAPI, HTTPException  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from api.build import FUND_META, build_terminal_data  # noqa: E402
 from src.analytics.pnl import load_positions  # noqa: E402
@@ -91,3 +92,10 @@ def chat(payload: dict):
     return {"stub": True,
             "reply": "Ask Claude isn't wired to the model yet — this is a stubbed "
                      "response. The live research co-pilot arrives in Phase D."}
+
+
+# Serve the built React terminal (single-container deploy). The /api routes above
+# are matched first; this catch-all mount serves the SPA for everything else.
+_DIST = Path(__file__).resolve().parents[1] / "web" / "dist"
+if _DIST.exists():
+    app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="web")
