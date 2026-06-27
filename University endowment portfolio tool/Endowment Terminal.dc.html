@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:#070a12;}
+  @keyframes pulseDot{0%,100%{opacity:1;}50%{opacity:.3;}}
+  ::-webkit-scrollbar{width:9px;height:9px;}
+  ::-webkit-scrollbar-thumb{background:#1d2840;border-radius:5px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+</style>
+</helmet>
+<div style="height:100vh;width:100%;display:flex;flex-direction:column;background:#070a12;color:#e8edf7;font-family:'IBM Plex Sans',sans-serif;overflow:hidden;">
+  <!-- ===== HEADER ===== -->
+  <div style="height:48px;flex:0 0 48px;display:flex;align-items:center;gap:14px;padding:0 16px;background:#0a0f1a;border-bottom:1px solid #1d2840;">
+    <div style="display:flex;align-items:center;gap:10px;cursor:pointer;" onClick="{{ goHome }}">
+      <div style="width:22px;height:22px;transform:rotate(45deg);background:linear-gradient(135deg,#5a93f9,#3a6fd0);border-radius:5px;"></div>
+      <div style="font:600 14px 'IBM Plex Sans';color:#e8edf7;">University Endowment <span style="color:#5d6a85;font-weight:400;font-size:12.5px;">· Investments Office</span></div>
+    </div>
+    <div onClick="{{ goSearch }}" style="display:flex;align-items:center;gap:8px;background:#0e1422;border:1px solid #1d2840;border-radius:7px;padding:7px 11px;width:320px;margin-left:10px;cursor:pointer;" style-hover="border-color:#2a3a5c;">
+      <svg width="13" height="13" viewBox="0 0 16 16" style="fill:none;stroke:#5d6a85;stroke-width:1.6;flex:0 0 auto;"><circle cx="7" cy="7" r="4.5"></circle><line x1="11" y1="11" x2="14.5" y2="14.5" style="stroke-linecap:round;"></line></svg>
+      <span style="font-size:11.5px;color:#5d6a85;">Search ticker, fund, sector…</span>
+      <span style="margin-left:auto;font-family:'IBM Plex Mono';font-size:10px;color:#3c465e;border:1px solid #1d2840;border-radius:3px;padding:1px 5px;">⌘K</span>
+    </div>
+    <div style="flex:1;"></div>
+    <div style="display:flex;align-items:center;gap:7px;font-family:'IBM Plex Mono';font-size:11px;color:#9aa7c2;"><span style="width:7px;height:7px;border-radius:50%;background:#21d07a;animation:pulseDot 2s infinite;"></span>MARKETS OPEN</div>
+    <div style="font-family:'IBM Plex Mono';font-size:11px;color:#6b7794;">FRI 27 JUN 2026 · 14:32 ET</div>
+    <div style="width:28px;height:28px;border-radius:50%;background:#13203a;border:1px solid #24345a;display:flex;align-items:center;justify-content:center;font:600 10.5px 'IBM Plex Sans';color:#9aa7c2;">PM</div>
+  </div>
+  <!-- ===== BODY ===== -->
+  <div style="flex:1;display:flex;min-height:0;">
+    <!-- NAV RAIL -->
+    <div style="width:54px;flex:0 0 54px;background:#0a0f1a;border-right:1px solid #1d2840;display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:5px;">
+      <sc-for list="{{ nav }}" as="item" hint-placeholder-count="4">
+        <div onClick="{{ item.on }}" title="{{ item.label }}" style="width:40px;height:38px;border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;background:{{ item.bg }};color:{{ item.color }};" style-hover="background:#13203a;">{{ item.icon }}</div>
+      </sc-for>
+      <div style="margin-top:auto;width:40px;height:38px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#5d6a85;cursor:pointer;" title="Settings" style-hover="background:#13203a;"><svg width="16" height="16" viewBox="0 0 16 16" style="fill:currentColor;"><rect x="1" y="3" width="14" height="1.6" rx="0.8"></rect><circle cx="5" cy="3.8" r="2.4" style="stroke:#0a0f1a;stroke-width:1.2;"></circle><rect x="1" y="11.4" width="14" height="1.6" rx="0.8"></rect><circle cx="11" cy="12.2" r="2.4" style="stroke:#0a0f1a;stroke-width:1.2;"></circle></svg></div>
+    </div>
+    <!-- MAIN -->
+    <div ref="{{ mainRef }}" style="flex:1;min-width:0;overflow-y:auto;overflow-x:hidden;">
+      <!-- ============ DASHBOARD ============ -->
+      <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:16px;display:flex;flex-direction:column;gap:13px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div style="display:flex;background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:3px;gap:2px;">
+            <sc-for list="{{ fundTabs }}" as="t" hint-placeholder-count="3"><span onClick="{{ t.on }}" style="padding:7px 18px;border-radius:6px;cursor:pointer;font:{{ t.weight }} 12px 'IBM Plex Sans';background:{{ t.bg }};color:{{ t.color }};">{{ t.label }}</span></sc-for>
+          </div>
+          <div style="display:flex;align-items:center;gap:3px;background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:3px;">
+            <sc-for list="{{ periods }}" as="p" hint-placeholder-count="6"><span onClick="{{ p.on }}" style="padding:5px 10px;border-radius:5px;cursor:pointer;font:{{ p.weight }} 10px 'IBM Plex Mono';background:{{ p.bg }};color:{{ p.color }};">{{ p.k }}</span></sc-for>
+          </div>
+        </div>
+        <!-- hero -->
+        <div style="background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:17px;display:flex;flex-direction:column;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div>
+              <div style="font:500 10.5px 'IBM Plex Sans';text-transform:uppercase;letter-spacing:.09em;color:#6b7794;">{{ heroTitle }}</div>
+              <div style="font-family:'IBM Plex Mono';font-size:36px;font-weight:500;color:#e8edf7;margin-top:5px;letter-spacing:-.01em;">{{ heroValue }}</div>
+              <div style="font-family:'IBM Plex Mono';font-size:13px;margin-top:3px;color:{{ heroRetColor }};">{{ heroRetText }}</div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end;font:500 10.5px 'IBM Plex Sans';">
+              <sc-for list="{{ heroLegend }}" as="l" hint-placeholder-count="2"><span style="color:{{ l.color }};">{{ l.mark }} {{ l.label }}</span></sc-for>
+            </div>
+          </div>
+          <div style="height:184px;margin-top:10px;">{{ heroChartEl }}</div>
+          <div style="display:flex;justify-content:space-between;font-family:'IBM Plex Mono';font-size:9px;color:#4a5573;margin-top:6px;"><sc-for list="{{ xLabels }}" as="x" hint-placeholder-count="6"><span>{{ x.v }}</span></sc-for></div>
+        </div>
+        <!-- stat tiles -->
+        <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:11px;">
+          <sc-for list="{{ heroStats }}" as="s" hint-placeholder-count="6">
+            <div style="background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:11px 13px;"><div style="font:600 8.5px 'IBM Plex Sans';letter-spacing:.07em;text-transform:uppercase;color:#6b7794;">{{ s.l }}</div><div style="font-family:'IBM Plex Mono';font-size:19px;margin-top:6px;color:{{ s.c }};">{{ s.v }}</div><div style="font-size:9px;color:#5d6a85;margin-top:2px;">{{ s.sub }}</div></div>
+          </sc-for>
+        </div>
+        <!-- lower -->
+        <div style="display:grid;grid-template-columns:1fr 360px;gap:13px;">
+          <!-- holdings -->
+          <div style="background:#0e1422;border:1px solid #1d2840;border-radius:9px;display:flex;flex-direction:column;overflow:hidden;">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #1d2840;"><span style="font:600 10.5px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;">{{ dashTitle }}</span><span style="font-family:'IBM Plex Mono';font-size:9.5px;color:#5d6a85;">{{ dashCount }}</span></div>
+            <div style="display:grid;grid-template-columns:62px 1fr 50px 54px 84px 66px 66px;gap:8px;padding:8px 14px;border-bottom:1px solid #1d2840;font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;"><span>Ticker</span><span>Name</span><span style="text-align:right;">Fund</span><span style="text-align:right;">Wt</span><span style="text-align:right;">Price</span><span style="text-align:right;">Day</span><span style="text-align:right;">Contrib</span></div>
+            <sc-for list="{{ dashHoldings }}" as="r" hint-placeholder-count="10">
+              <div onClick="{{ r.open }}" style="display:grid;grid-template-columns:62px 1fr 50px 54px 84px 66px 66px;gap:8px;align-items:center;padding:{{ rowPad }} 14px;border-bottom:1px solid #131c2f;font-size:11px;cursor:pointer;" style-hover="background:#0f1830;">
+                <span style="font-family:'IBM Plex Mono';font-weight:600;color:#e8edf7;">{{ r.t }}</span>
+                <span style="color:#9aa7c2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ r.n }}</span>
+                <span style="text-align:right;font:500 9px 'IBM Plex Mono';color:{{ r.fundColor }};">{{ r.fundTag }}</span>
+                <span style="font-family:'IBM Plex Mono';text-align:right;color:#cdd6e8;">{{ r.wStr }}</span>
+                <span style="font-family:'IBM Plex Mono';text-align:right;color:#cdd6e8;">{{ r.pxStr }}</span>
+                <span style="font-family:'IBM Plex Mono';text-align:right;color:{{ r.dayColor }};">{{ r.dayStr }}</span>
+                <span style="font-family:'IBM Plex Mono';text-align:right;color:{{ r.ctbColor }};">{{ r.ctbStr }}</span>
+              </div>
+            </sc-for>
+            <div onClick="{{ onMore }}" style="padding:9px 14px;border-top:1px solid #1d2840;font-family:'IBM Plex Mono';font-size:9.5px;color:#5a93f9;text-align:center;cursor:pointer;" style-hover="background:#0f1830;">{{ dashMoreText }}</div>
+          </div>
+          <!-- right: donut + contributors -->
+          <div style="display:flex;flex-direction:column;gap:13px;">
+            <div style="background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:13px;">
+              <div style="font:600 9.5px 'IBM Plex Sans';letter-spacing:.09em;text-transform:uppercase;color:#7e8aa6;margin-bottom:11px;">Sector Mix</div>
+              <div style="display:flex;align-items:center;gap:15px;">
+                {{ donutEl }}
+                <div style="flex:1;display:flex;flex-direction:column;gap:7px;font-size:10px;">
+                  <sc-for list="{{ donutLegend }}" as="d" hint-placeholder-count="5"><div onClick="{{ d.on }}" style="display:flex;align-items:center;gap:7px;cursor:pointer;"><span style="width:8px;height:8px;border-radius:2px;background:{{ d.color }};"></span><span style="flex:1;color:#9aa7c2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ d.name }}</span><span style="font-family:'IBM Plex Mono';color:#cdd6e8;">{{ d.pct }}</span></div></sc-for>
+                </div>
+              </div>
+            </div>
+            <div style="background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:13px;flex:1;">
+              <div style="font:600 9.5px 'IBM Plex Sans';letter-spacing:.09em;text-transform:uppercase;color:#7e8aa6;margin-bottom:11px;">{{ contribTitle }}</div>
+              <div style="display:flex;flex-direction:column;gap:9px;">
+                <sc-for list="{{ contribRows }}" as="c" hint-placeholder-count="4"><div style="display:flex;align-items:center;gap:9px;"><span style="width:48px;font-family:'IBM Plex Mono';font-size:11px;color:#cdd6e8;">{{ c.t }}</span><div style="flex:1;height:7px;background:#13203a;border-radius:4px;overflow:hidden;display:flex;"><div style="width:{{ c.w }};height:100%;background:{{ c.color }};{{ c.align }}"></div></div><span style="width:42px;text-align:right;font-family:'IBM Plex Mono';font-size:10px;color:{{ c.color }};">{{ c.v }}</span></div></sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ============ STOCKS LIST ============ -->
+      <sc-if value="{{ isStocks }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:16px;display:flex;flex-direction:column;gap:13px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div><div style="font:600 17px 'IBM Plex Sans';color:#e8edf7;">All Holdings</div><div style="font-family:'IBM Plex Mono';font-size:10.5px;color:#6b7794;margin-top:3px;">{{ stocksCount }}</div></div>
+          <div style="display:flex;align-items:center;gap:8px;background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:8px 12px;width:280px;">
+            <svg width="13" height="13" viewBox="0 0 16 16" style="fill:none;stroke:#5d6a85;stroke-width:1.6;flex:0 0 auto;"><circle cx="7" cy="7" r="4.5"></circle><line x1="11" y1="11" x2="14.5" y2="14.5" style="stroke-linecap:round;"></line></svg>
+            <input value="{{ query }}" onChange="{{ onQuery }}" placeholder="Filter by ticker, name, sector…" style="flex:1;background:transparent;border:none;outline:none;color:#e8edf7;font:400 11.5px 'IBM Plex Sans';" />
+          </div>
+        </div>
+        <div style="background:#0e1422;border:1px solid #1d2840;border-radius:9px;overflow:hidden;">
+          <div style="display:grid;grid-template-columns:74px 1fr 150px 64px 70px 92px 72px 72px 60px;gap:8px;padding:9px 14px;border-bottom:1px solid #1d2840;font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;">
+            <sc-for list="{{ stocksHead }}" as="h" hint-placeholder-count="9"><span onClick="{{ h.on }}" style="cursor:pointer;text-align:{{ h.align }};color:{{ h.color }};">{{ h.label }}{{ h.caret }}</span></sc-for>
+          </div>
+          <sc-for list="{{ stocksRows }}" as="r" hint-placeholder-count="14">
+            <div onClick="{{ r.open }}" style="display:grid;grid-template-columns:74px 1fr 150px 64px 70px 92px 72px 72px 60px;gap:8px;align-items:center;padding:{{ rowPad }} 14px;border-bottom:1px solid #131c2f;font-size:11px;cursor:pointer;" style-hover="background:#0f1830;">
+              <span style="font-family:'IBM Plex Mono';font-weight:600;color:#e8edf7;">{{ r.t }}</span>
+              <span style="color:#9aa7c2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ r.n }}</span>
+              <span style="color:#6b7794;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ r.s }}</span>
+              <span style="text-align:right;font:500 9px 'IBM Plex Mono';color:{{ r.fundColor }};">{{ r.fundTag }}</span>
+              <span style="font-family:'IBM Plex Mono';text-align:right;color:#cdd6e8;">{{ r.wStr }}</span>
+              <span style="font-family:'IBM Plex Mono';text-align:right;color:#cdd6e8;">{{ r.pxStr }}</span>
+              <span style="font-family:'IBM Plex Mono';text-align:right;color:{{ r.dayColor }};">{{ r.dayStr }}</span>
+              <span style="font-family:'IBM Plex Mono';text-align:right;color:{{ r.mtdColor }};">{{ r.mtdStr }}</span>
+              <span style="font-family:'IBM Plex Mono';text-align:right;color:#7e8aa6;">{{ r.peStr }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ============ SECTORS LIST ============ -->
+      <sc-if value="{{ isSectors }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:16px;display:flex;flex-direction:column;gap:13px;">
+        <div><div style="font:600 17px 'IBM Plex Sans';color:#e8edf7;">Sectors</div><div style="font-family:'IBM Plex Mono';font-size:10.5px;color:#6b7794;margin-top:3px;">Allocation across the combined endowment · click to drill in</div></div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:13px;">
+          <sc-for list="{{ sectorCards }}" as="c" hint-placeholder-count="9">
+            <div onClick="{{ c.on }}" style="background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;cursor:pointer;" style-hover="border-color:#2a3a5c;background:#101728;">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;"><span style="font:600 13px 'IBM Plex Sans';color:#e8edf7;max-width:165px;">{{ c.name }}</span><span style="font-family:'IBM Plex Mono';font-size:18px;color:#e8edf7;">{{ c.shareStr }}</span></div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;"><span style="font-family:'IBM Plex Mono';font-size:10px;color:#6b7794;">{{ c.count }} holdings</span><span style="font-family:'IBM Plex Mono';font-size:11px;color:{{ c.retColor }};">MTD {{ c.ret }}</span></div>
+              <div style="margin-top:12px;height:6px;border-radius:4px;background:#13203a;overflow:hidden;display:flex;"><div style="width:{{ c.gPct }};background:#5a93f9;height:100%;"></div><div style="width:{{ c.vPct }};background:#f4a531;height:100%;"></div></div>
+              <div style="display:flex;justify-content:space-between;font-family:'IBM Plex Mono';font-size:8px;color:#5d6a85;margin-top:5px;"><span>Growth {{ c.gPctLbl }}</span><span>Value {{ c.vPctLbl }}</span></div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ============ STOCK DETAIL ============ -->
+      <sc-if value="{{ isStock }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:16px;display:flex;flex-direction:column;gap:13px;">
+        <div onClick="{{ stkBack }}" style="display:inline-flex;align-items:center;gap:6px;font:500 11px 'IBM Plex Sans';color:#6b7794;cursor:pointer;width:fit-content;" style-hover="color:#cdd6e8;">‹ {{ stkBackLabel }}</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+          <div>
+            <div style="display:flex;align-items:center;gap:11px;">
+              <span style="font-family:'IBM Plex Mono';font-size:26px;font-weight:600;color:#e8edf7;">{{ stk.t }}</span>
+              <span style="font:600 9px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:{{ stk.fundColor }};border:1px solid {{ stk.fundColor }};border-radius:5px;padding:3px 8px;">{{ stk.fundLabel }}</span>
+              <span onClick="{{ stk.openSector }}" style="font-size:10px;color:#9aa7c2;background:#13203a;border-radius:5px;padding:4px 9px;cursor:pointer;" style-hover="background:#1a2740;">{{ stk.s }}</span>
+            </div>
+            <div style="font:400 14px 'IBM Plex Sans';color:#9aa7c2;margin-top:6px;">{{ stk.n }}</div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-family:'IBM Plex Mono';font-size:28px;font-weight:500;color:#e8edf7;">{{ stk.pxStr }}</div>
+            <div style="font-family:'IBM Plex Mono';font-size:13px;color:{{ stk.dayColor }};margin-top:2px;">{{ stk.dayArrow }} {{ stk.dayStr }} today</div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 320px;gap:13px;">
+          <!-- left: chart + stats + desc -->
+          <div style="display:flex;flex-direction:column;gap:13px;">
+            <div style="background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                <span style="font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;">Price · vs {{ stk.benchShort }}</span>
+                <div style="display:flex;align-items:center;gap:3px;background:#0a0f1a;border:1px solid #1d2840;border-radius:8px;padding:3px;"><sc-for list="{{ periods }}" as="p" hint-placeholder-count="6"><span onClick="{{ p.on }}" style="padding:4px 9px;border-radius:5px;cursor:pointer;font:{{ p.weight }} 10px 'IBM Plex Mono';background:{{ p.bg }};color:{{ p.color }};">{{ p.k }}</span></sc-for></div>
+              </div>
+              <div style="height:200px;">{{ stkChartEl }}</div>
+              <div style="margin-top:12px;"><div style="display:flex;justify-content:space-between;font-family:'IBM Plex Mono';font-size:10px;color:#6b7794;margin-bottom:5px;"><span>52W Low {{ stk.loStr }}</span><span>52W High {{ stk.hiStr }}</span></div><div style="height:6px;border-radius:4px;background:linear-gradient(90deg,#1d2840,#2a3a5c);position:relative;"><div style="position:absolute;top:-3px;width:3px;height:12px;border-radius:2px;background:#e8edf7;left:{{ stk.rangePos }};"></div></div></div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:11px;">
+              <sc-for list="{{ stkStats }}" as="s" hint-placeholder-count="8"><div style="background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:11px 13px;"><div style="font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;">{{ s.l }}</div><div style="font-family:'IBM Plex Mono';font-size:16px;margin-top:6px;color:{{ s.c }};">{{ s.v }}</div></div></sc-for>
+            </div>
+            <div style="background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;">
+              <div style="font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;margin-bottom:9px;">About</div>
+              <div style="font:400 12.5px/1.6 'IBM Plex Sans';color:#b8c2d8;">{{ stk.descr }}</div>
+            </div>
+          </div>
+          <!-- right: position + ask -->
+          <div style="display:flex;flex-direction:column;gap:13px;">
+            <div style="background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;">
+              <div style="font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;margin-bottom:13px;">Position in {{ stk.fundLabel }} Fund</div>
+              <div style="display:flex;flex-direction:column;gap:13px;">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;"><span style="font-size:11px;color:#9aa7c2;">Portfolio weight</span><span style="font-family:'IBM Plex Mono';font-size:17px;color:#e8edf7;">{{ stkPos.weightStr }}</span></div>
+                <div style="display:flex;justify-content:space-between;align-items:baseline;"><span style="font-size:11px;color:#9aa7c2;">Est. position value</span><span style="font-family:'IBM Plex Mono';font-size:17px;color:#e8edf7;">{{ stkPos.valueStr }}</span></div>
+                <div style="display:flex;justify-content:space-between;align-items:baseline;"><span style="font-size:11px;color:#9aa7c2;">Est. shares</span><span style="font-family:'IBM Plex Mono';font-size:15px;color:#cdd6e8;">{{ stkPos.sharesStr }}</span></div>
+                <div style="display:flex;justify-content:space-between;align-items:baseline;"><span style="font-size:11px;color:#9aa7c2;">Contribution MTD</span><span style="font-family:'IBM Plex Mono';font-size:15px;color:{{ stkPos.contribColor }};">{{ stkPos.contribStr }}</span></div>
+              </div>
+            </div>
+            <div style="background:linear-gradient(180deg,#140f2c,#0c0d1f);border:1px solid #241f3e;border-radius:9px;padding:15px;">
+              <div style="display:flex;align-items:center;gap:7px;font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#c3b9ff;margin-bottom:11px;"><span style="font-size:13px;">✦</span>Ask Claude about {{ stk.t }}</div>
+              <div style="display:flex;flex-direction:column;gap:7px;">
+                <sc-for list="{{ stkAskChips }}" as="a" hint-placeholder-count="3"><div onClick="{{ a.on }}" style="font-size:11px;color:#cdc6ee;background:#15112c;border:1px solid #2c2550;border-radius:7px;padding:9px 11px;cursor:pointer;" style-hover="background:#1c1640;border-color:#3a3168;">{{ a.text }}</div></sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ============ SECTOR DETAIL ============ -->
+      <sc-if value="{{ isSector }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:16px;display:flex;flex-direction:column;gap:13px;">
+        <div onClick="{{ secBack }}" style="display:inline-flex;align-items:center;gap:6px;font:500 11px 'IBM Plex Sans';color:#6b7794;cursor:pointer;width:fit-content;" style-hover="color:#cdd6e8;">‹ Sectors</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+          <div><div style="font:600 22px 'IBM Plex Sans';color:#e8edf7;">{{ sec.name }}</div><div style="font:400 12.5px 'IBM Plex Sans';color:#9aa7c2;margin-top:5px;max-width:560px;line-height:1.55;">{{ sec.blurb }}</div></div>
+          <div style="text-align:right;"><div style="font-family:'IBM Plex Mono';font-size:24px;color:#e8edf7;">{{ sec.shareStr }}</div><div style="font-family:'IBM Plex Mono';font-size:11px;color:{{ sec.retColor }};margin-top:2px;">MTD {{ sec.ret }}</div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:11px;">
+          <div style="background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:13px;"><div style="font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;">Holdings</div><div style="font-family:'IBM Plex Mono';font-size:18px;color:#e8edf7;margin-top:5px;">{{ sec.count }}</div></div>
+          <div style="background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:13px;"><div style="font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;">Growth Fund Wt</div><div style="font-family:'IBM Plex Mono';font-size:18px;color:#5a93f9;margin-top:5px;">{{ sec.gWStr }}</div></div>
+          <div style="background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:13px;"><div style="font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;">Value Fund Wt</div><div style="font-family:'IBM Plex Mono';font-size:18px;color:#f4a531;margin-top:5px;">{{ sec.vWStr }}</div></div>
+        </div>
+        <div style="background:#0e1422;border:1px solid #1d2840;border-radius:9px;overflow:hidden;">
+          <div style="padding:10px 14px;border-bottom:1px solid #1d2840;font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;">Holdings in {{ sec.name }}</div>
+          <div style="display:grid;grid-template-columns:74px 1fr 64px 70px 92px 72px 72px;gap:8px;padding:8px 14px;border-bottom:1px solid #1d2840;font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;"><span>Ticker</span><span>Name</span><span style="text-align:right;">Fund</span><span style="text-align:right;">Wt</span><span style="text-align:right;">Price</span><span style="text-align:right;">Day</span><span style="text-align:right;">MTD</span></div>
+          <sc-for list="{{ secRows }}" as="r" hint-placeholder-count="6">
+            <div onClick="{{ r.open }}" style="display:grid;grid-template-columns:74px 1fr 64px 70px 92px 72px 72px;gap:8px;align-items:center;padding:{{ rowPad }} 14px;border-bottom:1px solid #131c2f;font-size:11px;cursor:pointer;" style-hover="background:#0f1830;">
+              <span style="font-family:'IBM Plex Mono';font-weight:600;color:#e8edf7;">{{ r.t }}</span>
+              <span style="color:#9aa7c2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ r.n }}</span>
+              <span style="text-align:right;font:500 9px 'IBM Plex Mono';color:{{ r.fundColor }};">{{ r.fundTag }}</span>
+              <span style="font-family:'IBM Plex Mono';text-align:right;color:#cdd6e8;">{{ r.wStr }}</span>
+              <span style="font-family:'IBM Plex Mono';text-align:right;color:#cdd6e8;">{{ r.pxStr }}</span>
+              <span style="font-family:'IBM Plex Mono';text-align:right;color:{{ r.dayColor }};">{{ r.dayStr }}</span>
+              <span style="font-family:'IBM Plex Mono';text-align:right;color:{{ r.mtdColor }};">{{ r.mtdStr }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+    </div>
+    <!-- ===== CLAUDE DOCK ===== -->
+    <div style="flex:0 0 322px;border-left:1px solid #241f3e;background:#0b0d1d;display:flex;flex-direction:column;min-height:0;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:13px 14px;border-bottom:1px solid #241f3e;background:linear-gradient(180deg,#140f2c,#0b0d1d);flex:0 0 auto;">
+        <div style="display:flex;align-items:center;gap:8px;font:600 11px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#c3b9ff;"><span style="font-size:15px;">✦</span>Ask Claude</div>
+        <span onClick="{{ onClear }}" title="Clear chat" style="font-size:9px;color:#7a6fb5;border:1px solid #2c2550;border-radius:5px;padding:3px 8px;cursor:pointer;" style-hover="background:#15112c;">CLEAR</span>
+      </div>
+      <div style="padding:9px 13px;border-bottom:1px solid #1a1730;display:flex;align-items:center;gap:7px;flex:0 0 auto;"><span style="font-size:8.5px;color:#7a6fb5;text-transform:uppercase;letter-spacing:.06em;">Context</span><span style="font-size:9.5px;color:#c3b9ff;background:#15112c;border:1px solid #2c2550;border-radius:5px;padding:3px 9px;">{{ ctxLabel }}</span></div>
+      <div ref="{{ chatRef }}" style="flex:1;padding:14px 13px;display:flex;flex-direction:column;gap:11px;overflow-y:auto;min-height:0;">
+        <sc-if value="{{ chatEmpty }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;margin:auto 0;color:#6b7794;padding:0 6px;">
+            <span style="font-size:24px;color:#5a4fd6;">✦</span>
+            <div style="font:600 12.5px 'IBM Plex Sans';color:#b8aef0;">Your research co-pilot</div>
+            <div style="font-size:11px;line-height:1.55;">Ask anything about a fund, holding, or sector. I read the data on whatever screen you're viewing — try one of the prompts below.</div>
+          </div>
+        </sc-if>
+        <sc-for list="{{ chatMsgs }}" as="m" hint-placeholder-count="0">
+          <div style="align-self:{{ m.align }};max-width:{{ m.maxw }};background:{{ m.bg }};border:1px solid {{ m.border }};padding:9px 11px;border-radius:{{ m.radius }};font-size:11.5px;line-height:1.55;color:{{ m.color }};white-space:pre-wrap;">{{ m.body }}</div>
+        </sc-for>
+        <sc-if value="{{ loading }}" hint-placeholder-val="{{ false }}">
+          <div style="align-self:flex-start;display:flex;align-items:center;gap:7px;color:#7a6fb5;font-size:10.5px;"><span style="display:flex;gap:3px;"><span style="width:5px;height:5px;border-radius:50%;background:#7a6fb5;animation:pulseDot 1.4s infinite;"></span><span style="width:5px;height:5px;border-radius:50%;background:#7a6fb5;animation:pulseDot 1.4s infinite .2s;"></span><span style="width:5px;height:5px;border-radius:50%;background:#7a6fb5;animation:pulseDot 1.4s infinite .4s;"></span></span>Claude is analyzing…</div>
+        </sc-if>
+      </div>
+      <div style="padding:11px 13px;border-top:1px solid #241f3e;flex:0 0 auto;">
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+          <sc-for list="{{ suggestions }}" as="s" hint-placeholder-count="3"><span onClick="{{ s.on }}" style="padding:5px 10px;border:1px solid #2c2550;border-radius:20px;font-size:9.5px;color:#a99fd0;background:#120f24;cursor:pointer;" style-hover="background:#1a1438;color:#c3b9ff;">{{ s.text }}</span></sc-for>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:8px;background:#0a0f1a;border:1px solid #2c2550;border-radius:10px;padding:8px 10px;">
+          <input value="{{ input }}" onChange="{{ onInput }}" onKeyDown="{{ onKeyDown }}" placeholder="Ask about {{ ctxShort }}…" style="flex:1;background:transparent;border:none;outline:none;color:#e8edf7;font:400 11.5px 'IBM Plex Sans';" />
+          <span onClick="{{ onSend }}" style="width:27px;height:27px;border-radius:7px;background:{{ sendBg }};display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;cursor:pointer;flex:0 0 auto;">↑</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;showBenchmark&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Charts&quot;},&quot;compactRows&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Layout&quot;},&quot;defaultFund&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;all&quot;,&quot;options&quot;:[&quot;growth&quot;,&quot;value&quot;,&quot;all&quot;],&quot;tsType&quot;:&quot;'growth'|'value'|'all'&quot;,&quot;section&quot;:&quot;Layout&quot;}}">
+class Component extends DCLogic {
+  constructor(props){
+    super(props);
+    this.mainRef = React.createRef();
+    this.chatRef = React.createRef();
+    this.state = {
+      view: 'dashboard',
+      fund: (props && props.defaultFund) || 'growth',
+      period: 'YTD',
+      ticker: null,
+      sector: null,
+      prevView: 'dashboard',
+      sortKey: 'w',
+      sortDir: 'desc',
+      query: '',
+      chat: [],
+      input: '',
+      loading: false,
+    };
+    this._build();
+  }
+
+  _build(){
+    this.gAum = 184.24; this.vAum = 146.80; this.total = this.gAum + this.vAum;
+    this.funds = {
+      growth: { key:'growth', name:'Growth', long:'Growth Fund · Net Asset Value', bench:'Russell 1000 Growth', benchShort:'R1000 Growth', aum:this.gAum, color:'#5a93f9',
+        ret:{'1M':3.2,'3M':7.8,'6M':12.4,'YTD':18.4,'1Y':24.6,'5Y':118.0}, bret:{'1M':2.1,'3M':6.0,'6M':9.8,'YTD':16.2,'1Y':21.4,'5Y':99.0},
+        alpha:2.2, beta:1.08, sharpe:1.42, vol:17.8, pe:31.4, pb:8.1, dy:0.6 },
+      value: { key:'value', name:'Value', long:'Value Fund · Net Asset Value', bench:'Russell 1000 Value', benchShort:'R1000 Value', aum:this.vAum, color:'#f4a531',
+        ret:{'1M':1.4,'3M':4.2,'6M':7.1,'YTD':11.2,'1Y':14.8,'5Y':64.0}, bret:{'1M':1.0,'3M':3.4,'6M':6.0,'YTD':9.7,'1Y':13.1,'5Y':55.0},
+        alpha:1.5, beta:0.92, sharpe:1.18, vol:12.4, pe:16.8, pb:2.4, dy:2.3 },
+    };
+    const G = [
+      {t:'NVDA',n:'NVIDIA Corp',s:'Information Technology',w:9.8,px:134.20,chg:2.41,mtd:6.2,pe:58.2,pb:42.1,dy:0.03,beta:1.72,mc:3300,lo:86.6,hi:153.1,desc:'Designs the GPUs and CUDA software powering the AI data-center buildout; the portfolio\u2019s single largest position and top contributor.'},
+      {t:'MSFT',n:'Microsoft Corp',s:'Information Technology',w:8.4,px:478.20,chg:0.92,mtd:3.1,pe:36.1,pb:11.8,dy:0.71,beta:0.92,mc:3550,lo:366,hi:481,desc:'Azure cloud, enterprise software (Office, Dynamics) and a leading stake in the AI platform race via its OpenAI partnership.'},
+      {t:'AAPL',n:'Apple Inc',s:'Information Technology',w:7.1,px:224.85,chg:-0.34,mtd:1.2,pe:29.4,pb:51.2,dy:0.46,beta:1.18,mc:3400,lo:164,hi:237,desc:'iPhone-led hardware ecosystem with a fast-growing, high-margin services business and an unmatched installed base.'},
+      {t:'AMZN',n:'Amazon.com Inc',s:'Consumer Discretionary',w:6.3,px:201.40,chg:1.12,mtd:4.0,pe:38.6,pb:7.6,dy:0.0,beta:1.15,mc:2100,lo:145,hi:215,desc:'E-commerce and logistics scale plus AWS, the largest cloud-infrastructure franchise and the group\u2019s profit engine.'},
+      {t:'META',n:'Meta Platforms',s:'Communication Services',w:5.6,px:624.10,chg:0.66,mtd:5.4,pe:27.3,pb:8.9,dy:0.34,beta:1.21,mc:1580,lo:414,hi:638,desc:'Social-media advertising engine (Facebook, Instagram, WhatsApp) funding heavy AI and Reality Labs investment.'},
+      {t:'GOOGL',n:'Alphabet Inc',s:'Communication Services',w:5.1,px:182.70,chg:0.48,mtd:2.8,pe:23.8,pb:6.7,dy:0.45,beta:1.04,mc:2240,lo:130,hi:191,desc:'Search and YouTube advertising with Google Cloud growth and Gemini AI optionality across the product stack.'},
+      {t:'AVGO',n:'Broadcom Inc',s:'Information Technology',w:4.4,px:232.50,chg:1.92,mtd:8.1,pe:38.4,pb:14.2,dy:1.15,beta:1.10,mc:1090,lo:119,hi:251,desc:'Custom AI silicon (ASICs) and networking chips plus sticky infrastructure software from the VMware acquisition.'},
+      {t:'LLY',n:'Eli Lilly & Co',s:'Health Care',w:3.9,px:884.30,chg:1.41,mtd:7.2,pe:62.1,pb:48.6,dy:0.62,beta:0.42,mc:840,lo:678,hi:972,desc:'GLP-1 obesity and diabetes franchise (Mounjaro, Zepbound) driving rapid earnings growth and a premium multiple.'},
+      {t:'TSLA',n:'Tesla Inc',s:'Consumer Discretionary',w:3.4,px:342.10,chg:-2.63,mtd:-4.1,pe:88.4,pb:14.1,dy:0.0,beta:2.10,mc:1090,lo:182,hi:415,desc:'EV market leader pivoting its narrative toward autonomy (robotaxi), robotics and energy storage; highest-beta holding.'},
+      {t:'NFLX',n:'Netflix Inc',s:'Communication Services',w:3.0,px:712.40,chg:0.84,mtd:3.6,pe:41.2,pb:12.4,dy:0.0,beta:1.28,mc:310,lo:480,hi:735,desc:'Global streaming leader now scaling its ad-supported tier, password-sharing crackdown and live content.'},
+      {t:'CRM',n:'Salesforce Inc',s:'Information Technology',w:2.8,px:318.60,chg:0.52,mtd:2.1,pe:41.6,pb:4.8,dy:0.55,beta:1.30,mc:305,lo:212,hi:369,desc:'Enterprise CRM suite layering \u201CAgentforce\u201D AI agents across sales, service and marketing clouds.'},
+      {t:'ADBE',n:'Adobe Inc',s:'Information Technology',w:2.6,px:556.20,chg:-0.78,mtd:-1.8,pe:33.4,pb:12.6,dy:0.0,beta:1.24,mc:245,lo:433,hi:588,desc:'Creative and document software embedding generative-AI (Firefly); facing investor questions on AI disruption.'},
+      {t:'NOW',n:'ServiceNow Inc',s:'Information Technology',w:2.5,px:1024.50,chg:1.04,mtd:4.2,pe:58.9,pb:18.7,dy:0.0,beta:1.06,mc:210,lo:678,hi:1085,desc:'Workflow-automation platform for IT and enterprise operations with strong net-revenue retention.'},
+      {t:'AMD',n:'Advanced Micro Devices',s:'Information Technology',w:2.4,px:168.30,chg:1.66,mtd:5.1,pe:44.2,pb:4.1,dy:0.0,beta:1.68,mc:272,lo:116,hi:227,desc:'CPU and GPU challenger gaining data-center and AI-accelerator share against larger incumbents.'},
+      {t:'ISRG',n:'Intuitive Surgical',s:'Health Care',w:2.2,px:498.10,chg:0.41,mtd:3.0,pe:64.8,pb:11.2,dy:0.0,beta:1.02,mc:178,lo:350,hi:540,desc:'Dominant robotic-surgery platform (da Vinci) with a razor-and-blade model of recurring instrument sales.'},
+      {t:'INTU',n:'Intuit Inc',s:'Information Technology',w:2.1,px:642.80,chg:0.36,mtd:2.4,pe:38.1,pb:9.3,dy:0.62,beta:1.14,mc:180,lo:558,hi:715,desc:'TurboTax and QuickBooks small-business and consumer finance software with AI-driven upsell.'},
+      {t:'AMAT',n:'Applied Materials',s:'Information Technology',w:2.0,px:214.60,chg:1.22,mtd:4.4,pe:22.4,pb:7.8,dy:0.78,beta:1.55,mc:178,lo:156,hi:255,desc:'Largest semiconductor fab-equipment maker; highly leveraged to the chip-capex and AI build cycle.'},
+      {t:'QCOM',n:'Qualcomm Inc',s:'Information Technology',w:1.9,px:172.40,chg:0.58,mtd:1.9,pe:16.8,pb:6.2,dy:1.85,beta:1.22,mc:192,lo:149,hi:231,desc:'Smartphone modem and SoC licensing model expanding into automotive and IoT silicon.'},
+      {t:'UBER',n:'Uber Technologies',s:'Industrials',w:1.8,px:78.20,chg:1.34,mtd:3.8,pe:32.6,pb:9.4,dy:0.0,beta:1.36,mc:163,lo:54,hi:87,desc:'Global mobility and delivery marketplace now consistently profitable with strong free-cash-flow conversion.'},
+      {t:'PANW',n:'Palo Alto Networks',s:'Information Technology',w:1.7,px:198.40,chg:0.92,mtd:3.1,pe:52.4,pb:22.1,dy:0.0,beta:1.12,mc:130,lo:142,hi:208,desc:'Platform cybersecurity vendor consolidating network, cloud and SOC security under one stack.'},
+      {t:'SNPS',n:'Synopsys Inc',s:'Information Technology',w:1.6,px:588.30,chg:0.74,mtd:2.2,pe:44.8,pb:11.6,dy:0.0,beta:1.08,mc:91,lo:455,hi:624,desc:'Chip-design (EDA) software essential to every advanced semiconductor; a quiet AI-infrastructure beneficiary.'},
+      {t:'CDNS',n:'Cadence Design',s:'Information Technology',w:1.5,px:306.20,chg:0.68,mtd:2.5,pe:46.2,pb:18.4,dy:0.0,beta:1.05,mc:83,lo:222,hi:328,desc:'EDA software duopoly partner enabling the complex chip designs behind modern AI hardware.'},
+      {t:'KLAC',n:'KLA Corp',s:'Information Technology',w:1.4,px:812.50,chg:1.08,mtd:4.0,pe:28.6,pb:19.8,dy:0.78,beta:1.42,mc:108,lo:551,hi:896,desc:'Process-control and inspection tools critical to improving chip yields at leading-edge nodes.'},
+      {t:'MU',n:'Micron Technology',s:'Information Technology',w:1.3,px:118.40,chg:2.12,mtd:6.4,pe:18.2,pb:2.6,dy:0.39,beta:1.30,mc:132,lo:79,hi:158,desc:'Memory (DRAM and high-bandwidth HBM) maker levered directly to surging AI-server memory demand.'},
+      {t:'ANET',n:'Arista Networks',s:'Information Technology',w:1.3,px:96.20,chg:1.48,mtd:5.2,pe:39.4,pb:14.8,dy:0.0,beta:1.20,mc:121,lo:60,hi:133,desc:'High-speed data-center networking switches that knit together cloud and AI compute fabrics.'},
+      {t:'ABNB',n:'Airbnb Inc',s:'Consumer Discretionary',w:1.2,px:138.60,chg:-0.42,mtd:0.8,pe:32.1,pb:9.6,dy:0.0,beta:1.16,mc:88,lo:110,hi:170,desc:'Global short-term-rental marketplace with strong free-cash-flow margins and brand pricing power.'},
+      {t:'MELI',n:'MercadoLibre',s:'Consumer Discretionary',w:1.1,px:1842.30,chg:1.24,mtd:4.6,pe:48.6,pb:18.2,dy:0.0,beta:1.42,mc:93,lo:1400,hi:2120,desc:'Latin America\u2019s leading e-commerce and fintech (Mercado Pago) platform compounding at high rates.'},
+      {t:'SHOP',n:'Shopify Inc',s:'Information Technology',w:1.0,px:108.40,chg:0.96,mtd:3.4,pe:76.2,pb:12.1,dy:0.0,beta:1.58,mc:140,lo:60,hi:130,desc:'Commerce platform powering merchants\u2019 online and omnichannel stores; high growth, premium valuation.'},
+    ].map(o=>Object.assign(o,{fund:'growth'}));
+    const V = [
+      {t:'BRK.B',n:'Berkshire Hathaway',s:'Financials',w:6.2,px:462.10,chg:0.41,mtd:2.1,pe:9.8,pb:1.6,dy:0.0,beta:0.86,mc:995,lo:396,hi:492,desc:'Buffett-built insurance and operating-company conglomerate with a massive cash hoard and diversified earnings.'},
+      {t:'JPM',n:'JPMorgan Chase',s:'Financials',w:5.4,px:268.40,chg:0.78,mtd:2.8,pe:12.3,pb:2.1,dy:2.1,beta:1.10,mc:755,lo:179,hi:280,desc:'The largest and best-run U.S. money-center bank, spanning consumer lending, cards, markets and asset management.'},
+      {t:'XOM',n:'Exxon Mobil',s:'Energy',w:4.8,px:112.40,chg:-1.82,mtd:-3.2,pe:11.6,pb:1.9,dy:3.4,beta:0.88,mc:495,lo:100,hi:126,desc:'Integrated oil major with low-cost Permian and Guyana production; the fund\u2019s key energy and inflation hedge.'},
+      {t:'JNJ',n:'Johnson & Johnson',s:'Health Care',w:4.3,px:158.20,chg:0.22,mtd:1.1,pe:15.4,pb:5.2,dy:3.1,beta:0.52,mc:380,lo:140,hi:169,desc:'Diversified pharmaceutical and medtech franchise with a AAA-rated fortress balance sheet and reliable dividend.'},
+      {t:'PG',n:'Procter & Gamble',s:'Consumer Staples',w:3.9,px:168.90,chg:0.15,mtd:0.9,pe:24.6,pb:7.8,dy:2.4,beta:0.41,mc:398,lo:156,hi:180,desc:'Branded household and personal-care staples (Tide, Pampers) with durable pricing power and steady cash return.'},
+      {t:'CVX',n:'Chevron Corp',s:'Energy',w:3.6,px:152.30,chg:-1.24,mtd:-2.6,pe:13.2,pb:1.7,dy:4.5,beta:0.94,mc:275,lo:132,hi:168,desc:'Integrated oil major returning heavy cash via a top-tier dividend and buybacks; disciplined capital allocation.'},
+      {t:'KO',n:'Coca-Cola Co',s:'Consumer Staples',w:3.2,px:71.40,chg:0.34,mtd:1.4,pe:24.1,pb:9.8,dy:2.9,beta:0.58,mc:308,lo:60,hi:74,desc:'Global beverage brand and distribution moat delivering low-volatility growth and a dependable dividend.'},
+      {t:'WMT',n:'Walmart Inc',s:'Consumer Staples',w:3.0,px:92.60,chg:0.62,mtd:2.2,pe:36.4,pb:8.4,dy:1.0,beta:0.50,mc:745,lo:60,hi:97,desc:'Largest U.S. retailer scaling higher-margin e-commerce, advertising and membership alongside grocery scale.'},
+      {t:'HD',n:'Home Depot',s:'Consumer Discretionary',w:2.9,px:412.80,chg:0.48,mtd:1.6,pe:26.2,pb:78.4,dy:2.3,beta:1.02,mc:410,lo:323,hi:440,desc:'Leading home-improvement retailer levered to housing turnover, renovation and professional-contractor demand.'},
+      {t:'ABBV',n:'AbbVie Inc',s:'Health Care',w:2.8,px:192.40,chg:0.56,mtd:2.0,pe:18.6,pb:24.1,dy:3.2,beta:0.62,mc:340,lo:153,hi:207,desc:'Immunology pipeline (Skyrizi, Rinvoq) successfully replacing legacy Humira revenue with a strong dividend.'},
+      {t:'MRK',n:'Merck & Co',s:'Health Care',w:2.7,px:98.60,chg:-0.42,mtd:-1.4,pe:14.2,pb:5.6,dy:3.3,beta:0.40,mc:250,lo:90,hi:134,desc:'Oncology leader anchored by Keytruda, with a broad vaccine franchise and an attractive valuation.'},
+      {t:'BAC',n:'Bank of America',s:'Financials',w:2.6,px:44.20,chg:0.71,mtd:2.4,pe:12.6,pb:1.2,dy:2.5,beta:1.18,mc:335,lo:33,hi:48,desc:'Scaled consumer and commercial bank levered to net-interest income, deposit franchise and credit quality.'},
+      {t:'PEP',n:'PepsiCo Inc',s:'Consumer Staples',w:2.5,px:148.30,chg:0.18,mtd:0.7,pe:21.4,pb:11.2,dy:3.5,beta:0.48,mc:204,lo:141,hi:184,desc:'Snacks (Frito-Lay) and beverages with global distribution scale and a long dividend-growth record.'},
+      {t:'CSCO',n:'Cisco Systems',s:'Information Technology',w:2.4,px:58.40,chg:0.44,mtd:1.8,pe:16.8,pb:4.6,dy:2.8,beta:0.86,mc:232,lo:44,hi:62,desc:'Enterprise networking shifting toward software, security and recurring revenue; a Value-style tech holding.'},
+      {t:'VZ',n:'Verizon Communications',s:'Communication Services',w:2.3,px:42.80,chg:-0.28,mtd:-0.9,pe:9.4,pb:1.8,dy:6.3,beta:0.40,mc:180,lo:37,hi:47,desc:'Wireless carrier prized for its very high, well-covered dividend yield and defensive cash flows.'},
+      {t:'CAT',n:'Caterpillar Inc',s:'Industrials',w:2.2,px:398.20,chg:0.94,mtd:3.1,pe:18.2,pb:9.8,dy:1.4,beta:1.06,mc:190,lo:290,hi:418,desc:'Global heavy-equipment maker geared to construction, mining and infrastructure-spending cycles.'},
+      {t:'MCD',n:'McDonald\u2019s Corp',s:'Consumer Discretionary',w:2.1,px:296.40,chg:0.36,mtd:1.3,pe:24.8,pb:0.0,dy:2.3,beta:0.62,mc:213,lo:243,hi:320,desc:'Franchised global restaurant brand with durable, royalty-like cash flows and consistent dividend growth.'},
+      {t:'WFC',n:'Wells Fargo',s:'Financials',w:2.0,px:72.10,chg:0.66,mtd:2.5,pe:12.1,pb:1.4,dy:2.2,beta:1.14,mc:240,lo:50,hi:78,desc:'Large U.S. retail bank in a multi-year efficiency and balance-sheet turnaround after its asset cap lifted.'},
+      {t:'TMO',n:'Thermo Fisher',s:'Health Care',w:1.9,px:542.30,chg:0.52,mtd:1.9,pe:27.4,pb:4.2,dy:0.3,beta:0.86,mc:205,lo:480,hi:627,desc:'Life-sciences tools, instruments and lab supplies serving pharma, biotech and academic research.'},
+      {t:'ABT',n:'Abbott Laboratories',s:'Health Care',w:1.8,px:118.40,chg:0.41,mtd:1.5,pe:24.1,pb:4.8,dy:1.9,beta:0.70,mc:205,lo:99,hi:122,desc:'Diversified medical devices (FreeStyle Libre), diagnostics and nutrition with broad geographic reach.'},
+      {t:'LIN',n:'Linde plc',s:'Materials',w:1.7,px:462.80,chg:0.62,mtd:2.2,pe:30.2,pb:5.1,dy:1.3,beta:0.78,mc:220,lo:410,hi:487,desc:'Largest industrial-gas supplier with long-term take-or-pay contracts and pricing-led, defensive growth.'},
+      {t:'UNH',n:'UnitedHealth Group',s:'Health Care',w:1.7,px:528.40,chg:-0.84,mtd:-2.8,pe:17.6,pb:4.6,dy:1.6,beta:0.58,mc:485,lo:480,hi:624,desc:'Managed-care and Optum health-services leader by scale; under pressure on medical-cost trend.'},
+      {t:'PM',n:'Philip Morris Intl',s:'Consumer Staples',w:1.6,px:128.60,chg:0.48,mtd:1.7,pe:22.4,pb:0.0,dy:3.9,beta:0.56,mc:200,lo:96,hi:135,desc:'Smoke-free transition (IQOS, Zyn nicotine pouches) driving above-peer growth and a high dividend.'},
+      {t:'RTX',n:'RTX Corp',s:'Industrials',w:1.5,px:128.30,chg:0.58,mtd:2.0,pe:22.6,pb:2.9,dy:1.9,beta:0.72,mc:172,lo:96,hi:135,desc:'Aerospace and defense prime with a large, high-margin commercial-engine aftermarket (Pratt & Whitney).'},
+      {t:'HON',n:'Honeywell Intl',s:'Industrials',w:1.5,px:218.40,chg:0.44,mtd:1.5,pe:22.1,pb:7.4,dy:2.0,beta:0.96,mc:142,lo:188,hi:243,desc:'Diversified industrial across aerospace, building automation and energy-transition solutions.'},
+      {t:'IBM',n:'IBM Corp',s:'Information Technology',w:1.4,px:268.90,chg:0.72,mtd:2.6,pe:23.4,pb:8.2,dy:2.5,beta:0.70,mc:248,lo:162,hi:274,desc:'Hybrid-cloud (Red Hat), consulting and AI (watsonx) pivot funding a steady, growing dividend.'},
+      {t:'GS',n:'Goldman Sachs',s:'Financials',w:1.4,px:612.40,chg:0.88,mtd:3.2,pe:14.2,pb:1.8,dy:2.0,beta:1.30,mc:195,lo:400,hi:640,desc:'Premier investment bank levered to a recovery in capital-markets, M&A advisory and trading activity.'},
+      {t:'T',n:'AT&T Inc',s:'Communication Services',w:1.3,px:27.40,chg:-0.18,mtd:-0.6,pe:9.8,pb:1.5,dy:4.0,beta:0.58,mc:196,lo:16,hi:29,desc:'Wireless and fiber connectivity focused on deleveraging the balance sheet and sustaining its dividend.'},
+    ].map(o=>Object.assign(o,{fund:'value'}));
+    this.growthH = G; this.valueH = V; this.allH = G.concat(V);
+    this.byT = {}; this.allH.forEach(s=>{ this.byT[s.t]=s; });
+    this.sectorBlurb = {
+      'Information Technology':'Hardware, software and semiconductors \u2014 the portfolio\u2019s largest growth engine, led by the AI-infrastructure build-out.',
+      'Communication Services':'Interactive media, advertising and telecom \u2014 a barbell of high-growth platforms and high-yield carriers.',
+      'Consumer Discretionary':'Retail, autos, travel and restaurants \u2014 cyclical exposure tied to consumer spending and interest rates.',
+      'Health Care':'Pharma, devices and managed care \u2014 defensive ballast with secular GLP-1 and medical-innovation tailwinds.',
+      'Financials':'Banks, insurers and capital-markets firms \u2014 levered to interest rates, credit quality and the yield curve.',
+      'Energy':'Integrated oil, E&P and services \u2014 a cash-return story sensitive to crude prices and a Value-fund overweight.',
+      'Consumer Staples':'Food, beverage and household brands \u2014 low-beta, dividend-rich defensives with reliable pricing power.',
+      'Industrials':'Capital goods, aerospace and transport \u2014 geared to capex, infrastructure and the defense cycle.',
+      'Materials':'Chemicals, metals and industrial gases \u2014 input-cost and global-demand sensitive cyclical exposure.',
+    };
+    this.sectorAgg = this._aggSectors();
+  }
+
+  _aggSectors(){
+    const agg = {};
+    this.allH.forEach(s=>{
+      const a = agg[s.s] || (agg[s.s] = {name:s.s, gW:0, vW:0, count:0, wSum:0, wret:0, holdings:[]});
+      if(s.fund==='growth') a.gW += s.w; else a.vW += s.w;
+      a.count++; a.holdings.push(s); a.wSum += s.w; a.wret += s.w*s.mtd;
+    });
+    Object.values(agg).forEach(a=>{
+      a.ret = a.wSum ? a.wret/a.wSum : 0;
+      a.dollar = (a.gW/100)*this.gAum + (a.vW/100)*this.vAum;
+      a.share = a.dollar/this.total*100;
+      a.gDollar = (a.gW/100)*this.gAum; a.vDollar = (a.vW/100)*this.vAum;
+    });
+    return agg;
+  }
+
+  // ---------- helpers ----------
+  _rng(seed){ let s=seed>>>0; return ()=>{ s=(s*1664525+1013904223)>>>0; return s/4294967296; }; }
+  _hash(str){ let h=2166136261; for(let i=0;i<str.length;i++){ h^=str.charCodeAt(i); h=Math.imul(h,16777619); } return h>>>0; }
+  _series(seed, endVal, points, vol){
+    const rnd=this._rng(seed); const arr=[]; let v=100; const drift=(endVal-100)/points;
+    for(let i=0;i<points;i++){ arr.push(+v.toFixed(2)); v += drift + (rnd()-0.5)*vol*100; }
+    arr.push(+endVal.toFixed(2));
+    return arr;
+  }
+  _num(n){ return Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+  _sign(x,d){ return (x>=0?'+':'')+Number(x).toFixed(d===undefined?2:d); }
+  _col(x){ return x>=0 ? '#21d07a' : '#ff5666'; }
+  _blend(g,v){ return (g*this.gAum + v*this.vAum)/this.total; }
+
+  _icon(name, active){
+    const col = active ? '#5a93f9' : '#5d6a85';
+    const mk = (children, fill) => React.createElement('svg',{width:16,height:16,viewBox:'0 0 16 16',style:fill?{fill:'currentColor'}:{fill:'none',stroke:'currentColor',strokeWidth:1.6,strokeLinecap:'round',strokeLinejoin:'round'}}, children);
+    if(name==='dash') return mk([React.createElement('rect',{key:1,x:1,y:1,width:6,height:6,rx:1}),React.createElement('rect',{key:2,x:9,y:1,width:6,height:6,rx:1}),React.createElement('rect',{key:3,x:1,y:9,width:6,height:6,rx:1}),React.createElement('rect',{key:4,x:9,y:9,width:6,height:6,rx:1})], true);
+    if(name==='funds') return mk([React.createElement('rect',{key:1,x:1,y:8,width:3.4,height:7,rx:1}),React.createElement('rect',{key:2,x:6.3,y:4,width:3.4,height:11,rx:1}),React.createElement('rect',{key:3,x:11.6,y:1,width:3.4,height:14,rx:1})], true);
+    if(name==='stocks') return mk([React.createElement('polyline',{key:1,points:'1,11 5.5,6.5 9,9 15,2.5'})], false);
+    if(name==='sectors') return mk([React.createElement('circle',{key:1,cx:8,cy:8,r:6,style:{fill:'none',stroke:'currentColor',strokeWidth:1.8}}),React.createElement('path',{key:2,d:'M8 2 A6 6 0 0 1 13.2 8 L8 8 Z',style:{fill:'currentColor',stroke:'none'}})], false);
+    return null;
+  }
+
+  // ---------- navigation ----------
+  _go(view){ this.setState({view}); }
+  _openStock(t, from){ this.setState({view:'stock', ticker:t, prevView: from || this.state.view}); }
+  _openSector(name, from){ this.setState({view:'sector', sector:name, prevView: from || this.state.view}); }
+
+  // ---------- claude ----------
+  _ctx(){
+    const st=this.state;
+    if(st.view==='stock' && this.byT[st.ticker]){
+      const s=this.byT[st.ticker]; const f=this.funds[s.fund];
+      return 'The user is viewing the stock detail page for '+s.t+' ('+s.n+'), GICS sector '+s.s+', held in the '+f.name+' Fund at a '+s.w+'% portfolio weight. Latest: price $'+s.px+', day move '+this._sign(s.chg)+'%, month-to-date '+this._sign(s.mtd,1)+'%, forward P/E '+s.pe+', price/book '+s.pb+', dividend yield '+s.dy+'%, 3-year beta '+s.beta+', market cap ~$'+s.mc+'B, 52-week range $'+s.lo+'\u2013$'+s.hi+'. Business summary: '+s.desc;
+    }
+    if(st.view==='sector' && this.sectorAgg[st.sector]){
+      const a=this.sectorAgg[st.sector];
+      const names=a.holdings.slice().sort((x,y)=>y.w-x.w).slice(0,6).map(h=>h.t+' '+h.w+'%').join(', ');
+      return 'The user is viewing the '+a.name+' sector. It is '+a.share.toFixed(1)+'% of the total endowment ('+a.gW.toFixed(1)+'% of the Growth Fund, '+a.vW.toFixed(1)+'% of the Value Fund) across '+a.count+' holdings, with a weighted MTD return of '+this._sign(a.ret,1)+'%. Top holdings: '+names+'. Sector note: '+(this.sectorBlurb[a.name]||'');
+    }
+    const g=this.funds.growth, v=this.funds.value;
+    const focus = st.fund==='all'?'the combined portfolio':(st.fund==='growth'?'the Growth Fund':'the Value Fund');
+    return 'The user manages a university endowment with two equity funds and is currently focused on '+focus+'. GROWTH FUND: $'+g.aum+'M AUM, YTD '+g.ret.YTD+'% vs '+g.benchShort+' '+g.bret.YTD+'% (alpha +'+g.alpha+'%), beta '+g.beta+', Sharpe '+g.sharpe+', volatility '+g.vol+'%, forward P/E '+g.pe+', dividend yield '+g.dy+'%; largest positions NVDA 9.8%, MSFT 8.4%, AAPL 7.1%. VALUE FUND: $'+v.aum+'M AUM, YTD '+v.ret.YTD+'% vs '+v.benchShort+' '+v.bret.YTD+'% (alpha +'+v.alpha+'%), beta '+v.beta+', Sharpe '+v.sharpe+', volatility '+v.vol+'%, forward P/E '+v.pe+', dividend yield '+v.dy+'%; largest positions BRK.B 6.2%, JPM 5.4%, XOM 4.8%. Total endowment AUM $'+this.total.toFixed(1)+'M.';
+  }
+  _preamble(){
+    return 'You are a sharp, concise equity-research assistant embedded in a university endowment\u2019s portfolio-management terminal. Answer like a buy-side analyst briefing a portfolio manager and investment committee: lead with the takeaway, cite specific figures from the context, and stay tight \u2014 a few sentences or short bullets, not an essay. Use **bold** for key numbers or names. All figures are illustrative placeholder data as of the simulated date June 27, 2026; never claim to have live market data, and if asked for something beyond the data, reason qualitatively and say so. CONTEXT:\n'+this._ctx();
+  }
+  async _send(text){
+    const q=(text!=null?text:this.state.input).trim();
+    if(!q || this.state.loading) return;
+    const chat=this.state.chat.concat([{role:'user',content:q}]);
+    this.setState({chat, input:'', loading:true});
+    try{
+      if(!(window.claude && window.claude.complete)) throw new Error('no-claude');
+      const messages=[
+        {role:'user', content:this._preamble()+'\n\nReply only \u201CReady.\u201D to acknowledge, then answer the questions that follow.'},
+        {role:'assistant', content:'Ready.'},
+      ].concat(chat.map(m=>({role:m.role, content:m.content})));
+      const res=await window.claude.complete({messages});
+      this.setState(s=>({chat:s.chat.concat([{role:'assistant',content:res||'(no response)'}]), loading:false}));
+    }catch(e){
+      this.setState(s=>({chat:s.chat.concat([{role:'assistant',content:'\u26A0 I couldn\u2019t reach the model just now. Please try again in a moment.'}]), loading:false}));
+    }
+  }
+  _fmt(text){
+    const lines=String(text).split('\n'); const out=[];
+    lines.forEach((ln,li)=>{
+      const parts=ln.split(/(\*\*[^*]+\*\*)/g).map((p,pi)=> /^\*\*[^*]+\*\*$/.test(p) ? React.createElement('b',{key:pi,style:{color:'#fff',fontWeight:600}},p.slice(2,-2)) : p);
+      out.push(React.createElement('span',{key:'l'+li},parts));
+      if(li<lines.length-1) out.push(React.createElement('br',{key:'b'+li}));
+    });
+    return React.createElement('span',null,out);
+  }
+
+  // ---------- charts ----------
+  _chart(key, lines, h){
+    const w=900; const all=[]; lines.forEach(l=>l.values.forEach(v=>all.push(v)));
+    let min=Math.min.apply(null,all), max=Math.max.apply(null,all); const span=(max-min)||1;
+    const Y=v=> +(h-6-((v-min)/span)*(h-12)).toFixed(2);
+    const X=(i,n)=> +((i/(n-1))*w).toFixed(2);
+    const grid=[0.16,0.40,0.66,0.92].map((f,gi)=>React.createElement('line',{key:'g'+gi,x1:0,y1:+(h*f).toFixed(1),x2:w,y2:+(h*f).toFixed(1),style:{stroke:'#16203a',strokeWidth:1}}));
+    const defs=[]; const paths=[];
+    lines.forEach((l,li)=>{
+      const n=l.values.length; const d=l.values.map((v,i)=>(i?'L':'M')+X(i,n)+','+Y(v)).join(' ');
+      if(l.area){
+        const gid=key+'-g'+li;
+        defs.push(React.createElement('linearGradient',{key:'d'+li,id:gid,x1:0,y1:0,x2:0,y2:1},[
+          React.createElement('stop',{key:'a',offset:'0',style:{stopColor:l.color,stopOpacity:0.26}}),
+          React.createElement('stop',{key:'b',offset:'1',style:{stopColor:l.color,stopOpacity:0}})
+        ]));
+        paths.push(React.createElement('path',{key:'ar'+li,d:d+(' L'+w+','+h+' L0,'+h+' Z'),style:{fill:'url(#'+gid+')',stroke:'none'}}));
+      }
+      paths.push(React.createElement('path',{key:'ln'+li,d:d,style:{fill:'none',stroke:l.color,strokeWidth:l.width||2,strokeDasharray:l.dash||'none',strokeLinecap:'round',strokeLinejoin:'round'}}));
+    });
+    return React.createElement('svg',{viewBox:'0 0 '+w+' '+h,preserveAspectRatio:'none',style:{width:'100%',height:h+'px',display:'block'}}, [React.createElement('defs',{key:'defs'},defs)].concat(grid).concat(paths));
+  }
+  _donut(arr){
+    const cols=['#5a93f9','#6aa6ff','#8ea8f2','#21d07a','#f4a531','#c06fd6'];
+    const top=arr.slice(0,5); const other=arr.slice(5).reduce((s,x)=>s+x.pct,0);
+    const segs=top.map((x,i)=>({c:cols[i],pct:x.pct})); if(other>0.1) segs.push({c:'#3a4a6a',pct:other});
+    let acc=0; const stops=segs.map(s=>{ const a=acc,b=acc+s.pct; acc=b; return s.c+' '+a.toFixed(1)+'% '+b.toFixed(1)+'%'; }).join(', ');
+    return React.createElement('div',{style:{width:'108px',height:'108px',borderRadius:'50%',background:'conic-gradient('+stops+')',position:'relative',flex:'0 0 auto'}},
+      React.createElement('div',{style:{position:'absolute',inset:'17px',borderRadius:'50%',background:'#0e1422',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}},[
+        React.createElement('span',{key:'a',style:{fontFamily:"'IBM Plex Mono'",fontSize:'16px',color:'#e8edf7'}}, String(arr.length)),
+        React.createElement('span',{key:'b',style:{fontSize:'8px',color:'#6b7794',textTransform:'uppercase',letterSpacing:'.06em'}},'sectors')
+      ]));
+  }
+  _fundSectors(fundKey){
+    const hs = fundKey==='all'?this.allH:(fundKey==='growth'?this.growthH:this.valueH);
+    const m={}; let tot=0; hs.forEach(s=>{ m[s.s]=(m[s.s]||0)+s.w; tot+=s.w; });
+    return Object.keys(m).map(name=>({name,w:m[name],pct:m[name]/tot*100})).sort((a,b)=>b.w-a.w);
+  }
+
+  // ---------- lifecycle ----------
+  componentDidUpdate(prevP, prevS){
+    prevS = prevS || {};
+    if(prevS.view!==this.state.view && this.mainRef.current) this.mainRef.current.scrollTop=0;
+    const prevLen = (prevS.chat && prevS.chat.length) || 0;
+    if(this.chatRef.current && (prevLen!==this.state.chat.length || prevS.loading!==this.state.loading)) this.chatRef.current.scrollTop=this.chatRef.current.scrollHeight;
+  }
+
+  _rowVM(s, from){
+    const ctb=(s.w/100)*s.mtd;
+    return {
+      t:s.t, n:s.n, s:s.s,
+      fundTag: s.fund==='growth'?'GRW':'VAL',
+      fundColor: s.fund==='growth'?'#5a93f9':'#f4a531',
+      wStr: s.w.toFixed(1)+'%', pxStr: this._num(s.px),
+      dayStr: this._sign(s.chg)+'%', dayColor:this._col(s.chg),
+      mtdStr: this._sign(s.mtd,1)+'%', mtdColor:this._col(s.mtd),
+      peStr: s.pe ? s.pe.toFixed(1) : '\u2014',
+      ctbStr: this._sign(ctb,2), ctbColor:this._col(ctb),
+      open: ()=>this._openStock(s.t, from),
+    };
+  }
+
+  renderVals(){
+    const st=this.state;
+    const showBench = (this.props && this.props.showBenchmark!==undefined) ? this.props.showBenchmark : true;
+    const rowPad = (this.props && this.props.compactRows) ? '5px' : '7.5px';
+    const v={};
+    v.mainRef=this.mainRef; v.chatRef=this.chatRef; v.rowPad=rowPad;
+    v.isDashboard=st.view==='dashboard'; v.isStocks=st.view==='stocks'; v.isSectors=st.view==='sectors'; v.isStock=st.view==='stock'; v.isSector=st.view==='sector';
+    v.goHome=()=>this._go('dashboard'); v.goSearch=()=>this._go('stocks');
+
+    // nav
+    const navDef=[['dash','Dashboard','dashboard'],['funds','Funds','dashboard'],['stocks','Stocks','stocks'],['sectors','Sectors','sectors']];
+    const activeMap={dashboard:['dash','funds'],stocks:['stocks'],sectors:['sectors'],stock:['stocks'],sector:['sectors']};
+    v.nav=navDef.map(([id,label,go])=>{
+      const active=(activeMap[st.view]||[]).indexOf(id)>=0;
+      return {key:id,label,icon:this._icon(id==='dash'||id==='funds'?(id==='dash'?'dash':'funds'):id, active),bg:active?'#13203a':'transparent',color:active?'#5a93f9':'#5d6a85',on:()=>this._go(go)};
+    });
+
+    // periods
+    v.periods=['1M','3M','6M','YTD','1Y','5Y'].map(p=>({k:p,bg:p===st.period?'#13203a':'transparent',color:p===st.period?'#cdd6e8':'#6b7794',weight:p===st.period?600:500,on:()=>this.setState({period:p})}));
+
+    // ---- DASHBOARD ----
+    v.fundTabs=[['all','All Funds'],['growth','Growth'],['value','Value']].map(([k,label])=>({label,bg:st.fund===k?'#1b2c4d':'transparent',color:st.fund===k?'#fff':'#9aa7c2',weight:st.fund===k?600:500,on:()=>this.setState({fund:k})}));
+    const fk=st.fund; const per=st.period;
+    if(fk==='all'){
+      v.heroTitle='Total Endowment · Net Asset Value';
+      v.heroValue='$'+this.total.toFixed(1)+'M';
+      const r=this._blend(this.funds.growth.ret[per],this.funds.value.ret[per]);
+      const gain=this.total - this.total/(1+r/100);
+      v.heroArrow=r>=0?'\u25B2':'\u25BC'; v.heroRetColor=this._col(r);
+      v.heroRetText=v.heroArrow+' '+this._sign(r,1)+'% '+per+' · '+this._sign(gain,1)+'M · blended \u03B1 +'+this._blend(this.funds.growth.alpha,this.funds.value.alpha).toFixed(1)+'% vs policy';
+      const gs=this._series(this._hash('G'+per), 100*(1+this.funds.growth.ret[per]/100), 40, 0.012);
+      const vs=this._series(this._hash('V'+per), 100*(1+this.funds.value.ret[per]/100), 40, 0.010);
+      v.heroChartEl=this._chart('heroAll',[{values:gs,color:'#5a93f9',area:true},{values:vs,color:'#f4a531',width:2}],184);
+      v.heroLegend=[{mark:'\u25CF',label:'Growth',color:'#5a93f9'},{mark:'\u25CF',label:'Value',color:'#f4a531'}];
+      v.heroStats=[
+        {l:'Blended \u03B1',v:'+'+this._blend(this.funds.growth.alpha,this.funds.value.alpha).toFixed(1)+'%',sub:'vs policy',c:'#21d07a'},
+        {l:'Beta',v:this._blend(this.funds.growth.beta,this.funds.value.beta).toFixed(2),sub:'3Y',c:'#cdd6e8'},
+        {l:'Sharpe',v:this._blend(this.funds.growth.sharpe,this.funds.value.sharpe).toFixed(2),sub:'risk-adj',c:'#cdd6e8'},
+        {l:'Volatility',v:this._blend(this.funds.growth.vol,this.funds.value.vol).toFixed(1)+'%',sub:'ann \u03C3',c:'#cdd6e8'},
+        {l:'Fwd P/E',v:this._blend(this.funds.growth.pe,this.funds.value.pe).toFixed(1),sub:'wtd',c:'#cdd6e8'},
+        {l:'Div Yield',v:this._blend(this.funds.growth.dy,this.funds.value.dy).toFixed(1)+'%',sub:'ttm',c:'#cdd6e8'},
+      ];
+    } else {
+      const f=this.funds[fk];
+      v.heroTitle=f.long; v.heroValue='$'+f.aum.toFixed(2)+'M';
+      const r=f.ret[per]; const gain=f.aum - f.aum/(1+r/100);
+      v.heroArrow=r>=0?'\u25B2':'\u25BC'; v.heroRetColor=this._col(r);
+      v.heroRetText=v.heroArrow+' '+this._sign(r,1)+'% '+per+' · '+this._sign(gain,1)+'M · \u03B1 +'+f.alpha+'% vs '+f.benchShort;
+      const fs=this._series(this._hash(fk+per), 100*(1+f.ret[per]/100), 40, fk==='growth'?0.013:0.010);
+      const bs=this._series(this._hash(fk+'b'+per), 100*(1+f.bret[per]/100), 40, 0.010);
+      const lines=[{values:fs,color:f.color,area:true}]; if(showBench) lines.push({values:bs,color:'#5d6a85',width:1.4,dash:'4 4'});
+      v.heroChartEl=this._chart('hero'+fk,lines,184);
+      v.heroLegend=[{mark:'\u25CF',label:f.name+' Fund',color:f.color}]; if(showBench) v.heroLegend.push({mark:'\u2504',label:f.benchShort,color:'#5d6a85'});
+      v.heroStats=[
+        {l:'Alpha',v:'+'+f.alpha+'%',sub:'vs '+f.benchShort,c:'#21d07a'},
+        {l:'Beta',v:f.beta.toFixed(2),sub:'3Y trailing',c:'#cdd6e8'},
+        {l:'Sharpe',v:f.sharpe.toFixed(2),sub:'risk-adj',c:'#cdd6e8'},
+        {l:'Volatility',v:f.vol.toFixed(1)+'%',sub:'ann \u03C3',c:'#cdd6e8'},
+        {l:'Fwd P/E',v:f.pe.toFixed(1),sub:'wtd avg',c:'#cdd6e8'},
+        {l:'Div Yield',v:f.dy.toFixed(1)+'%',sub:'ttm',c:'#cdd6e8'},
+      ];
+    }
+    const xl={'1M':['4W','3W','2W','1W','NOW'],'3M':['APR','MAY','JUN'],'6M':['JAN','FEB','MAR','APR','MAY','JUN'],'YTD':['JAN','FEB','MAR','APR','MAY','JUN'],'1Y':['JUL','SEP','NOV','JAN','MAR','JUN'],'5Y':['\u201921','\u201922','\u201923','\u201924','\u201925','\u201926']};
+    v.xLabels=(xl[per]||[]).map(x=>({v:x}));
+
+    const dashSrc = fk==='all'?this.allH:(fk==='growth'?this.growthH:this.valueH);
+    const dashSorted=dashSrc.slice().sort((a,b)=>b.w-a.w);
+    v.dashHoldings=dashSorted.slice(0,10).map(s=>this._rowVM(s,'dashboard'));
+    v.dashTitle=(fk==='all'?'Top Holdings':this.funds[fk].name+' Holdings');
+    v.dashCount=(fk==='all'?this.allH.length:dashSrc.length)+' positions';
+    v.dashMoreText='View all '+(fk==='all'?this.allH.length:dashSrc.length)+' positions \u2192';
+    v.onMore=()=>this._go('stocks');
+
+    const fsec=this._fundSectors(fk);
+    v.donutEl=this._donut(fsec);
+    const dcols=['#5a93f9','#6aa6ff','#8ea8f2','#21d07a','#f4a531'];
+    v.donutLegend=fsec.slice(0,5).map((x,i)=>({name:x.name,pct:x.pct.toFixed(0)+'%',color:dcols[i],on:()=>this._openSector(x.name,'dashboard')}));
+
+    const contribs=dashSrc.map(s=>({t:s.t,c:(s.w/100)*s.mtd})).sort((a,b)=>b.c-a.c);
+    const pick=contribs.slice(0,3).concat(contribs.slice(-1));
+    const maxAbs=Math.max.apply(null,pick.map(p=>Math.abs(p.c)))||1;
+    v.contribTitle='Contributors · MTD';
+    v.contribRows=pick.map(p=>({t:p.t,v:this._sign(p.c,2),color:this._col(p.c),w:(Math.abs(p.c)/maxAbs*100).toFixed(0)+'%',align:p.c<0?'margin-left:auto;':''}));
+
+    // ---- STOCKS LIST ----
+    const q=(st.query||'').toLowerCase();
+    let rows=this.allH.filter(s=> !q || s.t.toLowerCase().indexOf(q)>=0 || s.n.toLowerCase().indexOf(q)>=0 || s.s.toLowerCase().indexOf(q)>=0);
+    const dir=st.sortDir==='asc'?1:-1;
+    const keyf={t:s=>s.t,n:s=>s.n,s:s=>s.s,w:s=>s.w,px:s=>s.px,chg:s=>s.chg,mtd:s=>s.mtd,pe:s=>s.pe};
+    const kf=keyf[st.sortKey]||keyf.w;
+    rows=rows.slice().sort((a,b)=>{ const x=kf(a),y=kf(b); if(typeof x==='string') return x.localeCompare(y)*dir; return (x-y)*dir; });
+    v.stocksRows=rows.map(s=>this._rowVM(s,'stocks'));
+    v.stocksCount=rows.length+' of '+this.allH.length+' holdings · both funds';
+    v.query=st.query||''; v.onQuery=e=>this.setState({query:e.target.value});
+    const heads=[['t','Ticker','left'],['n','Name','left'],['s','Sector','left'],['','Fund','right'],['w','Wt','right'],['px','Price','right'],['chg','Day','right'],['mtd','MTD','right'],['pe','P/E','right']];
+    v.stocksHead=heads.map(([k,label,align])=>({label,align,color:(k&&k===st.sortKey)?'#cdd6e8':'#6b7794',caret:(k&&k===st.sortKey)?(st.sortDir==='asc'?' \u2191':' \u2193'):'',on:k?()=>this.setState(s=>({sortKey:k,sortDir:(s.sortKey===k&&s.sortDir==='desc')?'asc':'desc'})):()=>{}}));
+
+    // ---- SECTORS LIST ----
+    v.sectorCards=Object.values(this.sectorAgg).filter(a=>a.count>0).sort((a,b)=>b.share-a.share).map(a=>{
+      const tot=a.gDollar+a.vDollar||1; const gp=a.gDollar/tot*100, vp=a.vDollar/tot*100;
+      return {name:a.name,shareStr:a.share.toFixed(1)+'%',count:a.count,ret:this._sign(a.ret,1)+'%',retColor:this._col(a.ret),gPct:gp.toFixed(0)+'%',vPct:vp.toFixed(0)+'%',gPctLbl:gp.toFixed(0)+'%',vPctLbl:vp.toFixed(0)+'%',on:()=>this._openSector(a.name,'sectors')};
+    });
+
+    // ---- STOCK DETAIL ----
+    if(st.view==='stock' && this.byT[st.ticker]){
+      const s=this.byT[st.ticker]; const f=this.funds[s.fund];
+      v.stk={t:s.t,n:s.n,s:s.s,fundLabel:f.name,fundColor:f.color,benchShort:f.benchShort,pxStr:'$'+this._num(s.px),dayStr:this._sign(s.chg)+'%',dayColor:this._col(s.chg),dayArrow:s.chg>=0?'\u25B2':'\u25BC',descr:s.desc,loStr:'$'+s.lo,hiStr:'$'+s.hi,rangePos:Math.max(0,Math.min(100,(s.px-s.lo)/((s.hi-s.lo)||1)*100)).toFixed(0)+'%',openSector:()=>this._openSector(s.s,'stock')};
+      const endv=100*(1+ Math.max(-30,Math.min(80, (f.ret[per]||0)*s.beta*(0.7+ (this._hash(s.t)%30)/100) ))/100);
+      const ss=this._series(this._hash(s.t+per), endv, 44, 0.022+ s.beta*0.006);
+      const bs=this._series(this._hash(s.fund+'b'+per), 100*(1+f.bret[per]/100), 44, 0.010);
+      const lines=[{values:ss,color:f.color,area:true}]; if(showBench) lines.push({values:bs,color:'#5d6a85',width:1.4,dash:'4 4'});
+      v.stkChartEl=this._chart('stk'+s.t+per,lines,200);
+      v.stkStats=[
+        {l:'Market Cap',v:'$'+(s.mc>=1000?(s.mc/1000).toFixed(2)+'T':s.mc+'B'),c:'#cdd6e8'},
+        {l:'Fwd P/E',v:s.pe?s.pe.toFixed(1):'\u2014',c:'#cdd6e8'},
+        {l:'Price / Book',v:s.pb?s.pb.toFixed(1):'\u2014',c:'#cdd6e8'},
+        {l:'Div Yield',v:s.dy.toFixed(2)+'%',c:'#cdd6e8'},
+        {l:'Beta (3Y)',v:s.beta.toFixed(2),c:'#cdd6e8'},
+        {l:'MTD',v:this._sign(s.mtd,1)+'%',c:this._col(s.mtd)},
+        {l:'Day',v:this._sign(s.chg)+'%',c:this._col(s.chg)},
+        {l:'52W Range',v:'$'+s.lo+'\u2013'+s.hi,c:'#cdd6e8'},
+      ];
+      const val=(s.w/100)*f.aum; const ctb=(s.w/100)*s.mtd;
+      v.stkPos={weightStr:s.w.toFixed(1)+'%',valueStr:'$'+val.toFixed(1)+'M',sharesStr:Math.round(val*1e6/s.px).toLocaleString('en-US'),contribStr:this._sign(ctb,2)+' pp',contribColor:this._col(ctb)};
+      v.stkBack=()=>this._go(st.prevView||'dashboard');
+      v.stkBackLabel=st.prevView==='stocks'?'All Holdings':(st.prevView==='sector'?(st.sector||'Sector'):(st.prevView==='dashboard'?'Dashboard':'Back'));
+      v.stkAskChips=[
+        {text:'What\u2019s the bull and bear case for '+s.t+'?',on:()=>this._send('What\u2019s the bull and bear case for '+s.t+'?')},
+        {text:'Is the '+s.pe+'x P/E justified?',on:()=>this._send('Is '+s.t+'\u2019s forward P/E of '+s.pe+'x justified given its growth and risk?')},
+        {text:'How does it fit the '+f.name+' Fund mandate?',on:()=>this._send('How does '+s.t+' fit the '+f.name+' Fund\u2019s mandate and what role does it play?')},
+      ];
+    }
+
+    // ---- SECTOR DETAIL ----
+    if(st.view==='sector' && this.sectorAgg[st.sector]){
+      const a=this.sectorAgg[st.sector];
+      v.sec={name:a.name,shareStr:a.share.toFixed(1)+'%',count:a.count,ret:this._sign(a.ret,1)+'%',retColor:this._col(a.ret),gWStr:a.gW.toFixed(1)+'%',vWStr:a.vW.toFixed(1)+'%',blurb:this.sectorBlurb[a.name]||''};
+      v.secRows=a.holdings.slice().sort((x,y)=>y.w-x.w).map(s=>this._rowVM(s,'sector'));
+      v.secBack=()=>this._go('sectors');
+    }
+
+    // ---- CLAUDE DOCK ----
+    let ctxLabel='Portfolio', ctxShort='the portfolio', suggDefs=[];
+    if(st.view==='stock' && this.byT[st.ticker]){
+      const s=this.byT[st.ticker]; ctxLabel=s.t+' · '+s.n.slice(0,16); ctxShort=s.t;
+      suggDefs=['What\u2019s driving '+s.t+' today?','Summarize the bull vs bear case','What are the key risks to watch?'];
+    } else if(st.view==='sector' && this.sectorAgg[st.sector]){
+      ctxLabel='Sector · '+st.sector; ctxShort=st.sector;
+      suggDefs=['What\u2019s our outlook on '+st.sector+'?','Are we over- or under-weight here?','Which holding has the most upside?'];
+    } else {
+      const lbl=st.fund==='all'?'Combined':(st.fund==='growth'?'Growth Fund':'Value Fund');
+      ctxLabel=lbl+' · '+st.period; ctxShort='this fund';
+      suggDefs=['Why are we beating the benchmark?','Compare Growth vs Value risk','Where is our biggest concentration risk?'];
+    }
+    v.ctxLabel=ctxLabel; v.ctxShort=ctxShort;
+    v.suggestions=suggDefs.map(t=>({text:t,on:()=>this._send(t)}));
+    v.chatEmpty=st.chat.length===0 && !st.loading;
+    v.chatMsgs=st.chat.map((m,i)=>{
+      const user=m.role==='user';
+      return {body: user?m.content:this._fmt(m.content), align:user?'flex-end':'flex-start', maxw:user?'86%':'95%', bg:user?'#13203a':'#15112c', border:user?'#13203a':'#2a2350', radius:user?'11px 11px 3px 11px':'11px 11px 11px 3px', color:user?'#cdd6e8':'#d7d2f0', key:i};
+    });
+    v.loading=st.loading; v.input=st.input||'';
+    v.onInput=e=>this.setState({input:e.target.value});
+    v.onKeyDown=e=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); this._send(); } };
+    v.onSend=()=>this._send();
+    v.onClear=()=>this.setState({chat:[]});
+    v.sendBg=(st.input&&st.input.trim()&&!st.loading)?'#5a4fd6':'#2c2550';
+    return v;
+  }
+}
+</script>
+</body>
+</html>

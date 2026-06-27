@@ -248,7 +248,8 @@ export default class App extends React.Component {
             {v.isSector && v.sec && this._renderSector(v)}
           </div>
 
-          {/* CLAUDE DOCK */}
+          {/* CLAUDE DOCK — hidden for now (flip false→true to restore) */}
+          {false && (
           <div style={s('flex:0 0 322px;border-left:1px solid #241f3e;background:#0b0d1d;display:flex;flex-direction:column;min-height:0;')}>
             <div style={s('display:flex;align-items:center;justify-content:space-between;padding:13px 14px;border-bottom:1px solid #241f3e;background:linear-gradient(180deg,#140f2c,#0b0d1d);flex:0 0 auto;')}>
               <div style={s("display:flex;align-items:center;gap:8px;font:600 11px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#c3b9ff;")}><span style={s('font-size:15px;')}>✦</span>Ask Claude</div>
@@ -280,6 +281,7 @@ export default class App extends React.Component {
               </div>
             </div>
           </div>
+          )}
         </div>
       </div>
     )

@@ -1,0 +1,14 @@
+{
+  "name": "andrew-brain-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local server for the Andrew Brain dashboard — static hosting + wiki write API.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "manifest": "node build-manifest.js"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3"
+  }
+}
