@@ -1,0 +1,360 @@
+"""On-demand per-stock research pull from yfinance for the stock-detail tabs.
+
+Powers the Financials, Earnings, News and Research tabs of the terminal's stock
+page. Each section is fetched live, normalized to display-ready JSON, and wrapped
+in its own try/except so a partial failure (e.g. a name with no analyst coverage)
+still returns the sections that did resolve. Results are cached in-process for a
+few minutes so re-opening a ticker is instant.
+
+Numbers are formatted to strings here (mirroring api/build.py); the frontend only
+computes geometry (bar heights, consensus-bar widths) and colors.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import math
+import time
+
+import pandas as pd
+import yfinance as yf
+
+from src.ingest.providers import to_yf
+
+_CACHE: dict[str, tuple[float, dict]] = {}
+_TTL = 900  # seconds
+
+
+# ---------- small formatters ----------
+def _num(v):
+    try:
+        f = float(v)
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    except (TypeError, ValueError):
+        return None
+
+
+def _money(v):
+    """Raw USD -> compact string ($44.1B, $3.30T)."""
+    f = _num(v)
+    if f is None:
+        return None
+    a = abs(f)
+    if a >= 1e12:
+        return f"${f / 1e12:.2f}T"
+    if a >= 1e9:
+        return f"${f / 1e9:.1f}B"
+    if a >= 1e6:
+        return f"${f / 1e6:.1f}M"
+    return f"${f:,.0f}"
+
+
+def _pct(v, dp=0, signed=True):
+    f = _num(v)
+    if f is None:
+        return None
+    return f"{f:+.{dp}f}%" if signed else f"{f:.{dp}f}%"
+
+
+def _qlabel(ts):
+    d = pd.Timestamp(ts)
+    return f"{((d.month - 1) // 3) + 1}Q{str(d.year)[2:]}"
+
+
+def _row(df, *names):
+    if df is None or getattr(df, "empty", True):
+        return None
+    for n in names:
+        if n in df.index:
+            return df.loc[n]
+    return None
+
+
+def _ago(ts, now):
+    """ISO string or epoch seconds -> '2h ago'."""
+    try:
+        if ts is None:
+            return ""
+        if isinstance(ts, (int, float)):
+            when = dt.datetime.fromtimestamp(float(ts), dt.timezone.utc)
+        else:
+            when = pd.Timestamp(ts).to_pydatetime()
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=dt.timezone.utc)
+        secs = (now - when).total_seconds()
+        if secs < 3600:
+            return f"{max(1, int(secs // 60))}m ago"
+        if secs < 86400:
+            return f"{int(secs // 3600)}h ago"
+        return f"{int(secs // 86400)}d ago"
+    except Exception:
+        return ""
+
+
+# ---------- sections ----------
+def _financials(tk):
+    inc = None
+    try:
+        inc = tk.quarterly_income_stmt
+    except Exception:
+        inc = None
+    if inc is None or inc.empty:
+        return None, None
+    try:
+        cf = tk.quarterly_cashflow
+    except Exception:
+        cf = None
+
+    rev = _row(inc, "Total Revenue", "Operating Revenue")
+    ni = _row(inc, "Net Income", "Net Income Common Stockholders")
+    gp = _row(inc, "Gross Profit")
+    oi = _row(inc, "Operating Income", "Total Operating Income As Reported")
+    eps = _row(inc, "Diluted EPS", "Basic EPS")
+    fcf = _row(cf, "Free Cash Flow")
+
+    cols = list(inc.columns)            # newest..oldest
+    latest = cols[0]
+    prevq = cols[1] if len(cols) > 1 else None
+    yearago = cols[4] if len(cols) > 4 else None
+
+    bars = []
+    for c in reversed(cols[:5]):        # oldest..newest, last 5
+        bars.append({
+            "period": _qlabel(c),
+            "revenue": (_num(rev[c]) / 1e9) if rev is not None and _num(rev[c]) is not None else None,
+            "netIncome": (_num(ni[c]) / 1e9) if ni is not None and _num(ni[c]) is not None else None,
+        })
+
+    def yoy(series):
+        if series is None or yearago is None:
+            return None
+        a, b = _num(series[latest]), _num(series[yearago])
+        if a is None or not b:
+            return None
+        return (a - b) / abs(b) * 100
+
+    def money_row(label, series):
+        if series is None:
+            return None
+        return {"label": label,
+                "cur": _money(series[latest]) or "—",
+                "prev": (_money(series[prevq]) if prevq is not None else None) or "—",
+                "yoy": _pct(yoy(series), 0) or "—"}
+
+    rows = []
+    r = money_row("Revenue", rev)
+    if r:
+        rows.append(r)
+    if gp is not None and rev is not None:
+        gm = gp / rev * 100
+        ppy = None
+        if yearago is not None and _num(gm[latest]) is not None and _num(gm[yearago]) is not None:
+            ppy = _num(gm[latest]) - _num(gm[yearago])
+        rows.append({"label": "Gross margin",
+                     "cur": f"{_num(gm[latest]):.1f}%" if _num(gm[latest]) is not None else "—",
+                     "prev": f"{_num(gm[prevq]):.1f}%" if prevq is not None and _num(gm[prevq]) is not None else "—",
+                     "yoy": (f"{ppy:+.1f}pp" if ppy is not None else "—")})
+    for lbl, ser in [("Operating income", oi), ("Net income", ni), ("Free cash flow", fcf)]:
+        r = money_row(lbl, ser)
+        if r:
+            rows.append(r)
+    if eps is not None:
+        a, b = _num(eps[latest]), (_num(eps[prevq]) if prevq is not None else None)
+        rows.append({"label": "Diluted EPS",
+                     "cur": f"${a:.2f}" if a is not None else "—",
+                     "prev": f"${b:.2f}" if b is not None else "—",
+                     "yoy": _pct(yoy(eps), 0) or "—"})
+
+    rev_yoy = yoy(rev)
+    margin = None
+    if ni is not None and rev is not None and _num(rev[latest]):
+        margin = _num(ni[latest]) / _num(rev[latest]) * 100
+    cap_bits = []
+    if rev_yoy is not None and _money(rev[latest]):
+        cap_bits.append(f"Revenue {_pct(rev_yoy, 0)} YoY to {_money(rev[latest])}")
+    if margin is not None:
+        cap_bits.append(f"net margin {margin:.0f}%")
+    financials = {"bars": bars, "rows": rows, "caption": " · ".join(cap_bits)}
+    rev_summary = {
+        "revActual": _money(rev[latest]) if rev is not None else None,
+        "revYoY": _pct(rev_yoy, 0) if rev_yoy is not None else None,
+    }
+    return financials, rev_summary
+
+
+def _earnings(tk, rev_summary):
+    try:
+        ed = tk.earnings_dates
+    except Exception:
+        ed = None
+    try:
+        cal = tk.calendar or {}
+    except Exception:
+        cal = {}
+
+    most, history = None, []
+    if ed is not None and not ed.empty and "Reported EPS" in ed.columns:
+        past = ed[ed["Reported EPS"].notna()].sort_index(ascending=False)
+        for ts, r in past.head(4).iterrows():
+            est, act, sup = _num(r.get("EPS Estimate")), _num(r.get("Reported EPS")), _num(r.get("Surprise(%)"))
+            history.append({"q": _qlabel(ts),
+                            "est": f"{est:.2f}" if est is not None else "—",
+                            "act": f"{act:.2f}" if act is not None else "—",
+                            "surprise": _pct(sup, 1) if sup is not None else "—"})
+        if not past.empty:
+            ts0, r0 = past.index[0], past.iloc[0]
+            d = pd.Timestamp(ts0)
+            most = {
+                "qtrLabel": f"{((d.month - 1) // 3) + 1}Q FY{d.year}",
+                "when": "reported " + d.strftime("%b %d, %Y"),
+                "beat": _num(r0.get("Surprise(%)")),
+                "epsActual": f"${_num(r0.get('Reported EPS')):.2f}" if _num(r0.get("Reported EPS")) is not None else "—",
+                "epsEst": f"{_num(r0.get('EPS Estimate')):.2f}" if _num(r0.get("EPS Estimate")) is not None else "—",
+            }
+    if most is None:
+        return None
+
+    nextd = "—"
+    edates = cal.get("Earnings Date")
+    if edates:
+        try:
+            nextd = pd.Timestamp(edates[0]).strftime("%b %d, %Y")
+        except Exception:
+            nextd = "—"
+    rev_summary = rev_summary or {}
+    most.update({
+        "revActual": rev_summary.get("revActual") or "—",
+        "revEst": "—",  # yfinance has no reliable historical revenue estimate
+        "revYoY": rev_summary.get("revYoY") or "—",
+        "next": nextd,
+        "history": history,
+    })
+    return most
+
+
+def _news(tk):
+    try:
+        raw = tk.news or []
+    except Exception:
+        raw = []
+    now = dt.datetime.now(dt.timezone.utc)
+    out = []
+    for item in raw[:8]:
+        c = item.get("content", item) if isinstance(item, dict) else {}
+        title = c.get("title")
+        if not title:
+            continue
+        prov = c.get("provider")
+        publisher = prov.get("displayName") if isinstance(prov, dict) else (c.get("publisher") or "—")
+        url = None
+        for k in ("canonicalUrl", "clickThroughUrl"):
+            if isinstance(c.get(k), dict) and c[k].get("url"):
+                url = c[k]["url"]
+                break
+        url = url or c.get("link") or "#"
+        ts = c.get("pubDate") or c.get("displayTime") or item.get("providerPublishTime")
+        out.append({"title": title, "publisher": publisher or "—", "ago": _ago(ts, now), "link": url})
+    return out or None
+
+
+_ACTION = {"up": "Upgrade", "down": "Downgrade", "main": "Maintain",
+           "reit": "Maintain", "init": "Initiate"}
+_CONS_LABEL = [(1.5, "Strong Buy"), (2.5, "Buy"), (3.5, "Hold"), (4.5, "Sell"), (99, "Strong Sell")]
+
+
+def _research(tk):
+    out = {}
+
+    consensus = None
+    try:
+        rec = tk.recommendations
+        if rec is not None and not rec.empty:
+            r = rec.iloc[0]
+            sb = int(_num(r.get("strongBuy")) or 0)
+            b = int(_num(r.get("buy")) or 0)
+            h = int(_num(r.get("hold")) or 0)
+            sl = int(_num(r.get("sell")) or 0) + int(_num(r.get("strongSell")) or 0)
+            total = sb + b + h + sl
+            if total:
+                mean = (1 * sb + 2 * b + 3 * h + 4.5 * sl) / total
+                label = next(lbl for cut, lbl in _CONS_LABEL if mean <= cut)
+                consensus = {"total": total, "label": label,
+                             "strongBuy": sb, "buy": b, "hold": h, "sell": sl}
+    except Exception:
+        consensus = None
+
+    try:
+        pt = tk.analyst_price_targets or {}
+        if consensus is not None and pt:
+            consensus.update({"mean": _num(pt.get("mean")), "low": _num(pt.get("low")),
+                              "high": _num(pt.get("high")), "current": _num(pt.get("current"))})
+    except Exception:
+        pass
+    if consensus is not None:
+        out["consensus"] = consensus
+
+    estimates = []
+    try:
+        ee = tk.earnings_estimate
+        re = tk.revenue_estimate
+        period_lbl = {"0q": "Current Qtr", "+1q": "Next Qtr", "0y": "Current Yr", "+1y": "Next Yr"}
+        for key, lbl in period_lbl.items():
+            if ee is None or key not in ee.index:
+                continue
+            er = ee.loc[key]
+            rr = re.loc[key] if (re is not None and key in re.index) else None
+            eps_avg = _num(er.get("avg"))
+            rev_avg = _num(rr.get("avg")) if rr is not None else None
+            growth = _num(rr.get("growth")) if rr is not None else None
+            estimates.append({
+                "period": lbl,
+                "eps": f"${eps_avg:.2f}" if eps_avg is not None else "—",
+                "epsN": str(int(_num(er.get("numberOfAnalysts")))) if _num(er.get("numberOfAnalysts")) is not None else "—",
+                "rev": _money(rev_avg) or "—",
+                "revYoY": _pct(growth * 100, 0) if growth is not None else "—",
+            })
+    except Exception:
+        estimates = []
+    if estimates:
+        out["estimates"] = estimates
+
+    actions = []
+    try:
+        ud = tk.upgrades_downgrades
+        if ud is not None and not ud.empty:
+            for ts, r in ud.sort_index(ascending=False).head(5).iterrows():
+                frm, to = r.get("FromGrade"), r.get("ToGrade")
+                grade = f"{frm} → {to}" if frm and to and frm != to else (to or frm or "—")
+                tgt = _num(r.get("currentPriceTarget"))
+                actions.append({
+                    "action": _ACTION.get(str(r.get("Action")), "Update"),
+                    "firm": r.get("Firm") or "—",
+                    "grade": grade,
+                    "target": f"${tgt:.0f}" if tgt is not None else "—",
+                    "date": pd.Timestamp(ts).strftime("%b %d"),
+                })
+    except Exception:
+        actions = []
+    if actions:
+        out["actions"] = actions
+
+    return out or None
+
+
+# ---------- public ----------
+def stock_research(ticker: str) -> dict:
+    now = time.time()
+    hit = _CACHE.get(ticker)
+    if hit and (now - hit[0]) < _TTL:
+        return hit[1]
+
+    tk = yf.Ticker(to_yf(ticker))
+    financials, rev_summary = _financials(tk)
+    payload = {
+        "ticker": ticker,
+        "financials": financials,
+        "earnings": _earnings(tk, rev_summary),
+        "news": _news(tk),
+        "research": _research(tk),
+    }
+    _CACHE[ticker] = (now, payload)
+    return payload

@@ -1,5 +1,5 @@
 import React from 'react'
-import { getData, getSeries, getFundSeries, postChat } from './api.js'
+import { getData, getSeries, getFundSeries, getStock, postChat } from './api.js'
 
 // Parse a design CSS string into a React style object (keeps styles verbatim).
 function s(css) {
@@ -23,9 +23,11 @@ export default class App extends React.Component {
       data: null, error: null,
       view: 'dashboard', fund: null, period: 'YTD',
       ticker: null, sector: null, prevView: 'dashboard',
+      stkTab: 'overview',
       sortKey: 'w', sortDir: 'desc', query: '',
       chat: [], input: '', loading: false,
       series: {},  // cache: key -> {dates, values/close, ...}
+      stkDetail: {},  // cache: ticker -> {financials, earnings, news, research} | 'loading' | 'error'
     }
   }
 
@@ -119,6 +121,17 @@ export default class App extends React.Component {
           : getFundSeries(id, per)
       p.then((res) => this.setState((st) => ({ series: { ...st.series, [key]: res } }))).catch(() => {})
     })
+    this._ensureStockDetail()
+  }
+
+  // ---------- stock-detail tabs (live yfinance) ----------
+  _ensureStockDetail() {
+    const { view, ticker } = this.state
+    if (view !== 'stock' || !ticker || this.state.stkDetail[ticker]) return
+    this.setState((st) => ({ stkDetail: { ...st.stkDetail, [ticker]: 'loading' } }))
+    getStock(ticker)
+      .then((res) => this.setState((st) => ({ stkDetail: { ...st.stkDetail, [ticker]: res } })))
+      .catch(() => this.setState((st) => ({ stkDetail: { ...st.stkDetail, [ticker]: 'error' } })))
   }
 
   // ---------- charts ----------
@@ -216,8 +229,8 @@ export default class App extends React.Component {
         {/* HEADER */}
         <div style={s('height:48px;flex:0 0 48px;display:flex;align-items:center;gap:14px;padding:0 16px;background:#0a0f1a;border-bottom:1px solid #1d2840;')}>
           <div style={s('display:flex;align-items:center;gap:10px;cursor:pointer;')} onClick={() => this._go('dashboard')}>
-            <div style={s('width:22px;height:22px;transform:rotate(45deg);background:linear-gradient(135deg,#5a93f9,#3a6fd0);border-radius:5px;')}></div>
-            <div style={s("font:600 14px 'IBM Plex Sans';color:#e8edf7;")}>University Endowment <span style={s('color:#5d6a85;font-weight:400;font-size:12.5px;')}>· Investments Office</span></div>
+            <img src="/uoig-logo.png" alt="UOIG" style={s('width:26px;height:26px;object-fit:contain;background:#fff;border-radius:5px;padding:2px;')} />
+            <div style={s("font:600 14px 'IBM Plex Sans';color:#e8edf7;")}>University of Oregon Investment Group</div>
           </div>
           <div onClick={() => this._go('stocks')} style={s('display:flex;align-items:center;gap:8px;background:#0e1422;border:1px solid #1d2840;border-radius:7px;padding:7px 11px;width:320px;margin-left:10px;cursor:pointer;')}>
             <svg width="13" height="13" viewBox="0 0 16 16" style={{ fill: 'none', stroke: '#5d6a85', strokeWidth: 1.6 }}><circle cx="7" cy="7" r="4.5"></circle><line x1="11" y1="11" x2="14.5" y2="14.5" style={{ strokeLinecap: 'round' }}></line></svg>
@@ -414,61 +427,254 @@ export default class App extends React.Component {
     )
   }
 
+  _yc(str) { return /^\+/.test(str) ? '#21d07a' : (/^-/.test(str) ? '#ff5666' : '#9aa7c2') }
+
+  // dispatch the active stock-detail tab through the live yfinance payload,
+  // handling the loading / fetch-error / no-coverage states uniformly.
+  _stkTabBody(v) {
+    const tab = v.stkTab, d = v.stkDetail
+    if (d === 'loading' || d === undefined) return this._stkStub(v.stkTab, 'fetching live data…', 'Pulling the latest from yfinance — one moment.')
+    if (d === 'error') return this._stkStub(v.stkTab, 'fetch failed', 'Could not reach the research feed. The backend may be offline or Yahoo rate-limited the request — reopen the stock to retry.')
+    if (tab === 'financials') return d.financials ? this._renderFinancials(d.financials) : this._stkStub('Financials', 'quarterly_income_stmt', 'No quarterly financials are available for this security from yfinance.')
+    if (tab === 'earnings') return d.earnings ? this._renderEarnings(d.earnings) : this._stkStub('Most Recent Earnings', 'get_earnings_dates', 'No earnings history is available for this security from yfinance.')
+    if (tab === 'news') return (d.news && d.news.length) ? this._renderNews(d.news) : this._stkStub('Recent News', 'ticker.news', 'No recent news is available for this security from yfinance.')
+    if (tab === 'research') return d.research ? this._renderResearch(d.research) : this._stkStub('Analyst Research', 'upgrades_downgrades', 'No analyst coverage is available for this security from yfinance.')
+    return null
+  }
+
+  _card(title, source, children, pad) {
+    return (
+      <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:' + (pad || 16) + 'px;')}>
+        <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.1em;text-transform:uppercase;color:#7e8aa6;margin-bottom:13px;")}>{title}{source ? <span style={s("font-family:'IBM Plex Mono';font-weight:400;color:#3c465e;text-transform:none;letter-spacing:0;")}> · {source}</span> : null}</div>
+        {children}
+      </div>
+    )
+  }
+
+  _renderFinancials(fin) {
+    const maxRev = Math.max.apply(null, fin.bars.map((b) => b.revenue || 0).concat([1]))
+    return this._card('Financials', 'quarterly_income_stmt', (
+      <div style={s('display:grid;grid-template-columns:minmax(0,1fr) 430px;gap:22px;')}>
+        <div>
+          <div style={s("display:flex;gap:15px;font:500 10px 'IBM Plex Sans';margin-bottom:12px;")}><span style={s('color:#5a93f9;')}>■ Revenue</span><span style={s('color:#21d07a;')}>■ Net income</span></div>
+          <div style={s('display:flex;align-items:flex-end;gap:16px;height:140px;padding:0 4px;')}>
+            {fin.bars.map((b, i) => {
+              const revH = Math.max(2, (b.revenue || 0) / maxRev * 100)
+              const niH = b.revenue ? Math.max(0, Math.min(100, (b.netIncome || 0) / b.revenue * 100)) : 0
+              const last = i === fin.bars.length - 1
+              return (
+                <div key={i} style={s('flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;height:100%;justify-content:flex-end;')}>
+                  <div style={{ ...s('position:relative;width:60%;border-radius:3px 3px 0 0;'), height: revH + '%', background: last ? '#7fb0ff' : '#5a93f9' }}><div style={{ ...s('position:absolute;left:0;right:0;bottom:0;background:#21d07a;border-radius:0 0 3px 3px;'), height: niH + '%' }}></div></div>
+                  <span style={{ ...s("font-family:'IBM Plex Mono';font-size:9px;"), color: last ? '#cdd6e8' : '#6b7794' }}>{b.period}</span>
+                </div>
+              )
+            })}
+          </div>
+          {fin.caption ? <div style={s("font:500 11px 'IBM Plex Sans';color:#9aa7c2;margin-top:12px;")}>{fin.caption}</div> : null}
+        </div>
+        <div>
+          <div style={s("display:grid;grid-template-columns:1fr 72px 72px 60px;gap:6px;padding-bottom:8px;border-bottom:1px solid #1d2840;font:600 8.5px 'IBM Plex Sans';letter-spacing:.05em;text-transform:uppercase;color:#6b7794;")}><span></span><span style={s('text-align:right;')}>Latest</span><span style={s('text-align:right;')}>Prior</span><span style={s('text-align:right;')}>YoY</span></div>
+          {fin.rows.map((r, i) => (
+            <div key={i} style={s('display:grid;grid-template-columns:1fr 72px 72px 60px;gap:6px;padding:8px 0;border-bottom:1px solid #131c2f;font-size:11px;')}><span style={s('color:#9aa7c2;')}>{r.label}</span><span style={s("font-family:'IBM Plex Mono';text-align:right;color:#e8edf7;")}>{r.cur}</span><span style={s("font-family:'IBM Plex Mono';text-align:right;color:#9aa7c2;")}>{r.prev}</span><span style={{ ...s("font-family:'IBM Plex Mono';text-align:right;"), color: this._yc(r.yoy) }}>{r.yoy}</span></div>
+          ))}
+        </div>
+      </div>
+    ))
+  }
+
+  _renderEarnings(e) {
+    const beatPos = (e.beat || 0) >= 0
+    return (
+      <div style={s('display:flex;flex-direction:column;gap:14px;')}>
+        <div style={s('background:linear-gradient(180deg,#0c1f18,#0e1422);border:1px solid #1d4536;border-radius:9px;padding:16px;')}>
+          <div style={s('display:flex;align-items:center;gap:10px;margin-bottom:13px;flex-wrap:wrap;')}><span style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.1em;text-transform:uppercase;color:#7e8aa6;")}>Most Recent Earnings</span><span style={s("font-family:'IBM Plex Mono';font-size:10px;color:#6b7794;")}>{e.qtrLabel} · {e.when}</span>{e.beat != null ? <span style={{ ...s("margin-left:auto;font:600 10px 'IBM Plex Sans';border-radius:5px;padding:4px 10px;"), color: beatPos ? '#21d07a' : '#ff5666', background: beatPos ? '#0c2a1e' : '#2a1115', border: '1px solid ' + (beatPos ? '#1d4536' : '#4a1f25') }}>EPS {beatPos ? 'beat' : 'miss'} {this._sign(e.beat, 1)}%</span> : null}</div>
+          <div style={s('display:grid;grid-template-columns:repeat(4,1fr);gap:13px;')}>
+            {[['EPS actual / est', e.epsActual, e.epsEst], ['Revenue actual / est', e.revActual, e.revEst], ['Revenue YoY', e.revYoY, null], ['Next report est', e.next, null]].map((c, i) => (
+              <div key={i} style={s('background:#0a1410;border:1px solid #163a2c;border-radius:7px;padding:12px;')}><div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.05em;text-transform:uppercase;color:#6b7794;")}>{c[0]}</div><div style={{ ...s("font-family:'IBM Plex Mono';font-size:16px;margin-top:6px;"), color: i === 2 ? this._yc(c[1]) : '#e8edf7' }}>{c[1]}{c[2] ? <span style={s('color:#5d6a85;font-size:12px;')}> / {c[2]}</span> : null}</div></div>
+            ))}
+          </div>
+        </div>
+        {e.history && e.history.length ? this._card('EPS History', 'estimate vs reported', (
+          <div>
+            <div style={s("display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;padding:8px 0;border-bottom:1px solid #1d2840;font:600 8.5px 'IBM Plex Sans';letter-spacing:.05em;text-transform:uppercase;color:#6b7794;")}><span>Quarter</span><span style={s('text-align:right;')}>Estimate</span><span style={s('text-align:right;')}>Actual</span><span style={s('text-align:right;')}>Surprise</span></div>
+            {e.history.map((h, i) => (
+              <div key={i} style={s('display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;padding:9px 0;border-bottom:1px solid #131c2f;font-size:11px;')}><span style={s("font-family:'IBM Plex Mono';color:#cdd6e8;")}>{h.q}</span><span style={s("font-family:'IBM Plex Mono';text-align:right;color:#9aa7c2;")}>{h.est}</span><span style={s("font-family:'IBM Plex Mono';text-align:right;color:#e8edf7;")}>{h.act}</span><span style={{ ...s("font-family:'IBM Plex Mono';text-align:right;"), color: this._yc(h.surprise) }}>{h.surprise}</span></div>
+            ))}
+          </div>
+        ), 16) : null}
+      </div>
+    )
+  }
+
+  _renderNews(news) {
+    return this._card('Recent News', 'ticker.news', (
+      <div style={s('display:flex;flex-direction:column;')}>
+        {news.map((n, i) => (
+          <a key={i} href={n.link} target="_blank" rel="noreferrer" style={s('display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid #131c2f;cursor:pointer;text-decoration:none;')}>
+            <span style={s('width:6px;height:6px;border-radius:50%;background:#5a93f9;flex:0 0 auto;margin-top:6px;')}></span>
+            <div style={s('flex:1;')}><div style={s("font:500 13px/1.4 'IBM Plex Sans';color:#cdd6e8;")}>{n.title}</div><div style={s("font-family:'IBM Plex Mono';font-size:10px;color:#6b7794;margin-top:4px;")}>{n.publisher} · {n.ago}</div></div>
+          </a>
+        ))}
+      </div>
+    ))
+  }
+
+  _renderResearch(r) {
+    const c = r.consensus
+    const lblColor = c && /Buy/.test(c.label) ? '#21d07a' : (c && /Sell/.test(c.label) ? '#ff5666' : '#cdd6e8')
+    let bar = null, range = null
+    if (c) {
+      const tot = (c.strongBuy + c.buy + c.hold + c.sell) || 1
+      const w = (n) => (n / tot * 100).toFixed(1) + '%'
+      bar = { sb: w(c.strongBuy), b: w(c.buy), h: w(c.hold), s: w(c.sell) }
+      if (c.low != null && c.high != null && c.high > c.low) {
+        const pos = (x) => Math.max(0, Math.min(100, (x - c.low) / (c.high - c.low) * 100)).toFixed(1) + '%'
+        const upside = (c.mean != null && c.current) ? (c.mean - c.current) / c.current * 100 : null
+        range = { meanPos: pos(c.mean), curPos: pos(c.current), upside: upside != null ? this._sign(upside, 1) + '%' : '—', upColor: this._col(upside) }
+      }
+    }
+    return (
+      <div style={s('display:flex;flex-direction:column;gap:14px;')}>
+        {c ? (
+          <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:16px;')}>
+            <div style={s('display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;')}><span style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.1em;text-transform:uppercase;color:#7e8aa6;")}>Analyst Consensus</span><span style={s("font-family:'IBM Plex Mono';font-size:10px;color:#6b7794;")}>{c.total} analysts</span></div>
+            <div style={s('display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:26px;')}>
+              <div>
+                <div style={s('display:flex;align-items:center;gap:12px;margin-bottom:14px;')}><div style={{ ...s("font:700 22px 'IBM Plex Sans';"), color: lblColor }}>{c.label}</div><div style={s('flex:1;height:1px;background:#1d2840;')}></div></div>
+                <div style={s('display:flex;height:11px;border-radius:6px;overflow:hidden;')}><div style={{ ...s('background:#21d07a;'), width: bar.sb }}></div><div style={{ ...s('background:#7fcf8a;'), width: bar.b }}></div><div style={{ ...s('background:#6b7794;'), width: bar.h }}></div><div style={{ ...s('background:#ff5666;'), width: bar.s }}></div></div>
+                <div style={s('display:grid;grid-template-columns:1fr 1fr;gap:7px 16px;margin-top:12px;font-size:10.5px;')}>
+                  {[['Strong Buy', '#21d07a', c.strongBuy], ['Buy', '#7fcf8a', c.buy], ['Hold', '#6b7794', c.hold], ['Sell', '#ff5666', c.sell]].map((x, i) => (
+                    <div key={i} style={s('display:flex;align-items:center;gap:6px;')}><span style={{ ...s('width:8px;height:8px;border-radius:2px;'), background: x[1] }}></span><span style={s('flex:1;color:#9aa7c2;')}>{x[0]}</span><span style={s("font-family:'IBM Plex Mono';color:#cdd6e8;")}>{x[2]}</span></div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                {range ? (
+                  <div>
+                    <div style={s("display:flex;justify-content:space-between;font-family:'IBM Plex Mono';font-size:9.5px;color:#6b7794;")}><span>Low ${c.low.toFixed(0)}</span><span style={{ color: lblColor }}>Mean ${c.mean.toFixed(0)}</span><span>High ${c.high.toFixed(0)}</span></div>
+                    <div style={s('position:relative;height:8px;border-radius:5px;background:#13203a;margin-top:8px;')}><div style={{ ...s('position:absolute;left:0;height:100%;border-radius:5px;background:linear-gradient(90deg,#1d2840,#21d07a);'), width: range.meanPos }}></div><div style={{ ...s('position:absolute;top:-4px;width:3px;height:16px;border-radius:2px;background:#21d07a;'), left: range.meanPos }}></div><div style={{ ...s('position:absolute;top:-4px;width:2px;height:16px;background:#e8edf7;'), left: range.curPos }}></div></div>
+                    <div style={s('position:relative;height:13px;margin-top:5px;')}><span style={{ ...s("position:absolute;transform:translateX(-50%);font-family:'IBM Plex Mono';font-size:9px;color:#cdd6e8;"), left: range.curPos }}>${c.current.toFixed(0)} now</span></div>
+                    <div style={{ ...s("font:500 11px 'IBM Plex Sans';margin-bottom:13px;"), color: range.upColor }}>Mean target ${c.mean.toFixed(0)} · implies {range.upside} upside</div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {r.estimates && r.estimates.length ? this._card('Forward Estimates', 'earnings_estimate', (
+          <div>
+            <div style={s("display:grid;grid-template-columns:1.4fr 1fr 64px 1fr 70px;gap:6px;padding:8px 0;border-bottom:1px solid #1d2840;font:600 8.5px 'IBM Plex Sans';letter-spacing:.05em;text-transform:uppercase;color:#6b7794;")}><span>Period</span><span style={s('text-align:right;')}>EPS est</span><span style={s('text-align:right;')}># An.</span><span style={s('text-align:right;')}>Rev est</span><span style={s('text-align:right;')}>Rev YoY</span></div>
+            {r.estimates.map((e, i) => (
+              <div key={i} style={s('display:grid;grid-template-columns:1.4fr 1fr 64px 1fr 70px;gap:6px;padding:9px 0;border-bottom:1px solid #131c2f;font-size:11px;')}><span style={s('color:#9aa7c2;')}>{e.period}</span><span style={s("font-family:'IBM Plex Mono';text-align:right;color:#e8edf7;")}>{e.eps}</span><span style={s("font-family:'IBM Plex Mono';text-align:right;color:#6b7794;")}>{e.epsN}</span><span style={s("font-family:'IBM Plex Mono';text-align:right;color:#cdd6e8;")}>{e.rev}</span><span style={{ ...s("font-family:'IBM Plex Mono';text-align:right;"), color: this._yc(e.revYoY) }}>{e.revYoY}</span></div>
+            ))}
+          </div>
+        ), 16) : null}
+        {r.actions && r.actions.length ? this._card('Recent Research', 'upgrades_downgrades', (
+          <div style={s('display:flex;flex-direction:column;')}>
+            {r.actions.map((a, i) => {
+              const col = a.action === 'Upgrade' ? ['#21d07a', '#0c2a1e', '#1d4536'] : a.action === 'Downgrade' ? ['#ff5666', '#2a1115', '#4a1f25'] : a.action === 'Initiate' ? ['#5a93f9', '#0e1c33', '#1d3a5c'] : ['#9aa7c2', '#13203a', '#13203a']
+              return (
+                <div key={i} style={s('display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid #131c2f;')}><span style={{ ...s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.04em;text-transform:uppercase;border-radius:4px;padding:4px 7px;flex:0 0 auto;width:74px;text-align:center;"), color: col[0], background: col[1], border: '1px solid ' + col[2] }}>{a.action}</span><div style={s('flex:1;')}><div style={s("font:600 12px 'IBM Plex Sans';color:#cdd6e8;")}>{a.firm}</div><div style={s("font-family:'IBM Plex Mono';font-size:10px;color:#6b7794;")}>{a.grade}</div></div><div style={s('text-align:right;')}><div style={s("font-family:'IBM Plex Mono';font-size:11px;color:#e8edf7;")}>{a.target}</div><div style={s("font-family:'IBM Plex Mono';font-size:9px;color:#6b7794;")}>{a.date}</div></div></div>
+              )
+            })}
+          </div>
+        ), 16) : null}
+      </div>
+    )
+  }
+
+  _stkStub(title, source, body) {
+    return (
+      <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:16px;')}>
+        <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.1em;text-transform:uppercase;color:#7e8aa6;margin-bottom:14px;")}>{title} <span style={s("font-family:'IBM Plex Mono';font-weight:400;color:#3c465e;text-transform:none;letter-spacing:0;")}>· {source}</span></div>
+        <div style={s('display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding:26px 12px;color:#5d6a85;')}>
+          <span style={s('font-size:22px;color:#3c4a66;')}>⊟</span>
+          <div style={s("font:600 12.5px 'IBM Plex Sans';color:#8290ad;")}>Not yet wired to the API</div>
+          <div style={s("font:400 11px/1.55 'IBM Plex Sans';max-width:380px;")}>{body}</div>
+        </div>
+      </div>
+    )
+  }
+
   _renderStock(v) {
     const stk = v.stk
     return (
-      <div style={s('padding:16px;display:flex;flex-direction:column;gap:13px;')}>
+      <div style={s('padding:18px;display:flex;flex-direction:column;gap:15px;')}>
         <div onClick={() => this._go(this.state.prevView || 'dashboard')} style={s("display:inline-flex;align-items:center;gap:6px;font:500 11px 'IBM Plex Sans';color:#6b7794;cursor:pointer;width:fit-content;")}>‹ {v.stkBackLabel}</div>
+        {/* header */}
         <div style={s('display:flex;justify-content:space-between;align-items:flex-start;')}>
-          <div>
-            <div style={s('display:flex;align-items:center;gap:11px;')}>
-              <span style={s("font-family:'IBM Plex Mono';font-size:26px;font-weight:600;color:#e8edf7;")}>{stk.t}</span>
-              <span style={{ ...s("font:600 9px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;border-radius:5px;padding:3px 8px;"), color: stk.fundColor, border: '1px solid ' + stk.fundColor }}>{stk.fundLabel}</span>
-              <span onClick={() => this._openSector(stk.s, 'stock')} style={s('font-size:10px;color:#9aa7c2;background:#13203a;border-radius:5px;padding:4px 9px;cursor:pointer;')}>{stk.s}</span>
+          <div style={s('display:flex;align-items:center;gap:13px;')}>
+            <div style={s("width:46px;height:46px;border-radius:11px;background:linear-gradient(135deg,#1c2d50,#0e1830);border:1px solid #28406e;display:flex;align-items:center;justify-content:center;font:600 20px 'IBM Plex Sans';color:#5a93f9;flex:0 0 auto;")}>{stk.initial}</div>
+            <div>
+              <div style={s('display:flex;align-items:center;gap:9px;')}>
+                <span style={s("font-family:'IBM Plex Mono';font-size:26px;font-weight:600;color:#e8edf7;letter-spacing:-.01em;")}>{stk.t}</span>
+                <span style={{ ...s("font:600 9px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;border-radius:5px;padding:3px 8px;"), color: stk.fundColor, border: '1px solid ' + stk.fundColor }}>{stk.fundLabel}</span>
+              </div>
+              <div style={s("font:400 14px 'IBM Plex Sans';color:#9aa7c2;margin-top:5px;")}>{stk.n}</div>
+              <div style={s('display:flex;gap:6px;margin-top:7px;')}>
+                <span onClick={() => this._openSector(stk.s, 'stock')} style={s("font:500 10px 'IBM Plex Sans';color:#9aa7c2;background:#0e1422;border:1px solid #1d2840;border-radius:5px;padding:3px 9px;cursor:pointer;")}>{stk.s}</span>
+              </div>
             </div>
-            <div style={s("font:400 14px 'IBM Plex Sans';color:#9aa7c2;margin-top:6px;")}>{stk.n}</div>
           </div>
           <div style={s('text-align:right;')}>
             <div style={s("font-family:'IBM Plex Mono';font-size:28px;font-weight:500;color:#e8edf7;")}>{stk.pxStr}</div>
-            <div style={{ ...s("font-family:'IBM Plex Mono';font-size:13px;margin-top:2px;"), color: stk.dayColor }}>{stk.dayArrow} {stk.dayStr} today</div>
+            <div style={{ ...s("font-family:'IBM Plex Mono';font-size:13px;margin-top:2px;"), color: stk.dayColor }}>{stk.dayArrow} {stk.dayStr} {stk.dayAbs} today</div>
+            <div style={s("font-family:'IBM Plex Mono';font-size:10px;color:#5d6a85;margin-top:3px;")}>{stk.asof}</div>
           </div>
         </div>
-        <div style={s('display:grid;grid-template-columns:1fr 320px;gap:13px;')}>
-          <div style={s('display:flex;flex-direction:column;gap:13px;')}>
-            <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
-              <div style={s('display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;')}>
-                <span style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;")}>Price · vs {stk.benchShort}</span>
-                <div style={s('display:flex;align-items:center;gap:3px;background:#0a0f1a;border:1px solid #1d2840;border-radius:8px;padding:3px;')}>{v.periods.map((p) => (<span key={p.k} onClick={p.on} style={{ ...s("padding:4px 9px;border-radius:5px;cursor:pointer;font-size:10px;font-family:'IBM Plex Mono';"), fontWeight: p.weight, background: p.bg, color: p.color }}>{p.k}</span>))}</div>
-              </div>
-              <div style={s('height:200px;')}>{v.stkChartEl}</div>
-              <div style={s('margin-top:12px;')}><div style={s("display:flex;justify-content:space-between;font-family:'IBM Plex Mono';font-size:10px;color:#6b7794;margin-bottom:5px;")}><span>52W Low {stk.loStr}</span><span>52W High {stk.hiStr}</span></div><div style={s('height:6px;border-radius:4px;background:linear-gradient(90deg,#1d2840,#2a3a5c);position:relative;')}><div style={{ ...s('position:absolute;top:-3px;width:3px;height:12px;border-radius:2px;background:#e8edf7;'), left: stk.rangePos }}></div></div></div>
-            </div>
-            <div style={s('display:grid;grid-template-columns:repeat(4,1fr);gap:11px;')}>
-              {v.stkStats.map((st2, i) => (<div key={i} style={s('background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:11px 13px;')}><div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;")}>{st2.l}</div><div style={{ ...s("font-family:'IBM Plex Mono';font-size:16px;margin-top:6px;"), color: st2.c }}>{st2.v}</div></div>))}
-            </div>
-            <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
-              <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;margin-bottom:9px;")}>About</div>
-              <div style={s("font:400 12.5px/1.6 'IBM Plex Sans';color:#b8c2d8;")}>{stk.descr}</div>
-            </div>
-          </div>
-          <div style={s('display:flex;flex-direction:column;gap:13px;')}>
-            <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
-              <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;margin-bottom:13px;")}>Position in {stk.fundLabel}</div>
-              <div style={s('display:flex;flex-direction:column;gap:13px;')}>
-                <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Portfolio weight</span><span style={s("font-family:'IBM Plex Mono';font-size:17px;color:#e8edf7;")}>{v.stkPos.weightStr}</span></div>
-                <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Est. position value</span><span style={s("font-family:'IBM Plex Mono';font-size:17px;color:#e8edf7;")}>{v.stkPos.valueStr}</span></div>
-                <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Est. shares</span><span style={s("font-family:'IBM Plex Mono';font-size:15px;color:#cdd6e8;")}>{v.stkPos.sharesStr}</span></div>
-                <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Contribution MTD</span><span style={{ ...s("font-family:'IBM Plex Mono';font-size:15px;"), color: v.stkPos.contribColor }}>{v.stkPos.contribStr}</span></div>
-              </div>
-            </div>
-            <div style={s('background:linear-gradient(180deg,#140f2c,#0c0d1f);border:1px solid #241f3e;border-radius:9px;padding:15px;')}>
-              <div style={s("display:flex;align-items:center;gap:7px;font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#c3b9ff;margin-bottom:11px;")}><span style={s('font-size:13px;')}>✦</span>Ask Claude about {stk.t}</div>
-              <div style={s('display:flex;flex-direction:column;gap:7px;')}>
-                {v.stkAskChips.map((a, i) => (<div key={i} onClick={a.on} style={s('font-size:11px;color:#cdc6ee;background:#15112c;border:1px solid #2c2550;border-radius:7px;padding:9px 11px;cursor:pointer;')}>{a.text}</div>))}
-              </div>
-            </div>
-          </div>
+        {/* snapshot */}
+        <div style={s('display:grid;grid-template-columns:repeat(6,1fr);gap:11px;')}>
+          {v.stkSnapshot.map((st2, i) => (<div key={i} style={s('background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:11px 13px;')}><div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;")}>{st2.l}</div><div style={{ ...s("font-family:'IBM Plex Mono';margin-top:6px;color:#cdd6e8;"), fontSize: st2.size }}>{st2.v}</div></div>))}
         </div>
+        {/* price chart (full width) */}
+        <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
+          <div style={s('display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;')}>
+            <span style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;")}>Price · vs {stk.benchShort}</span>
+            <div style={s('display:flex;align-items:center;gap:3px;background:#0a0f1a;border:1px solid #1d2840;border-radius:8px;padding:3px;')}>{v.periods.map((p) => (<span key={p.k} onClick={p.on} style={{ ...s("padding:4px 9px;border-radius:5px;cursor:pointer;font-size:10px;font-family:'IBM Plex Mono';"), fontWeight: p.weight, background: p.bg, color: p.color }}>{p.k}</span>))}</div>
+          </div>
+          <div style={s("display:flex;gap:15px;font:500 10px 'IBM Plex Sans';margin-bottom:6px;")}>{v.stkChartLegend.map((l, i) => (<span key={i} style={{ color: l.color }}>{l.mark} {l.label}</span>))}</div>
+          <div style={s('height:230px;')}>{v.stkChartEl}</div>
+          <div style={s('margin-top:12px;')}><div style={s("display:flex;justify-content:space-between;font-family:'IBM Plex Mono';font-size:10px;color:#6b7794;margin-bottom:5px;")}><span>52W Low {stk.loStr}</span><span>52W High {stk.hiStr}</span></div><div style={s('height:6px;border-radius:4px;background:linear-gradient(90deg,#1d2840,#2a3a5c);position:relative;')}><div style={{ ...s('position:absolute;top:-3px;width:3px;height:12px;border-radius:2px;background:#e8edf7;'), left: stk.rangePos }}></div></div></div>
+        </div>
+        {/* tabs */}
+        <div style={s('display:flex;gap:3px;border-bottom:1px solid #1d2840;')}>
+          {v.stkTabs.map((t) => (<span key={t.key} onClick={t.on} style={{ ...s("padding:9px 15px;font-size:11.5px;font-family:'IBM Plex Sans';cursor:pointer;margin-bottom:-1px;"), fontWeight: t.weight, color: t.color, borderBottom: t.border }}>{t.label}</span>))}
+        </div>
+        {/* OVERVIEW */}
+        {v.stkTab === 'overview' && (
+          <div style={s('display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:14px;')}>
+            <div style={s('display:flex;flex-direction:column;gap:14px;min-width:0;')}>
+              <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:16px;')}>
+                <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.1em;text-transform:uppercase;color:#7e8aa6;margin-bottom:10px;")}>Business</div>
+                <div style={s("font:400 12.5px/1.65 'IBM Plex Sans';color:#b8c2d8;")}>{stk.descr}</div>
+              </div>
+              <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:16px;')}>
+                <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.1em;text-transform:uppercase;color:#7e8aa6;margin-bottom:12px;")}>Company Facts</div>
+                <div style={s('display:grid;grid-template-columns:1fr 1fr 1fr;gap:13px;')}>
+                  {v.stkFacts.map((fct, i) => (<div key={i}><div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.05em;text-transform:uppercase;color:#6b7794;")}>{fct.l}</div><div style={{ ...s("font:500 12px 'IBM Plex Sans';margin-top:3px;"), color: fct.color }}>{fct.v}</div></div>))}
+                </div>
+              </div>
+            </div>
+            <div style={s('display:flex;flex-direction:column;gap:14px;')}>
+              <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
+                <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;margin-bottom:13px;")}>Position in {stk.fundLabel}</div>
+                <div style={s('display:flex;flex-direction:column;gap:12px;')}>
+                  <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Portfolio weight</span><span style={s("font-family:'IBM Plex Mono';font-size:16px;color:#e8edf7;")}>{v.stkPos.weightStr}</span></div>
+                  <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Est. position value</span><span style={s("font-family:'IBM Plex Mono';font-size:16px;color:#e8edf7;")}>{v.stkPos.valueStr}</span></div>
+                  <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Est. shares</span><span style={s("font-family:'IBM Plex Mono';font-size:14px;color:#cdd6e8;")}>{v.stkPos.sharesStr}</span></div>
+                  <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Contribution MTD</span><span style={{ ...s("font-family:'IBM Plex Mono';font-size:14px;"), color: v.stkPos.contribColor }}>{v.stkPos.contribStr}</span></div>
+                </div>
+              </div>
+              <div style={s('background:linear-gradient(180deg,#140f2c,#0c0d1f);border:1px solid #241f3e;border-radius:9px;padding:15px;')}>
+                <div style={s("display:flex;align-items:center;gap:7px;font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#c3b9ff;margin-bottom:11px;")}><span style={s('font-size:13px;')}>✦</span>Ask Claude about {stk.t}</div>
+                <div style={s('display:flex;flex-direction:column;gap:7px;')}>
+                  {v.stkAskChips.map((a, i) => (<div key={i} onClick={a.on} style={s('font-size:11px;color:#cdc6ee;background:#15112c;border:1px solid #2c2550;border-radius:7px;padding:9px 11px;cursor:pointer;')}>{a.text}</div>))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        {v.stkTab !== 'overview' && this._stkTabBody(v)}
       </div>
     )
   }
@@ -616,22 +822,52 @@ export default class App extends React.Component {
     if (st.view === 'stock' && this.byT[st.ticker]) {
       const h = this.byT[st.ticker], f = F[h.fund]
       const sseries = st.series[`stk:${st.ticker}:${per}`]
-      v.stk = { t: h.t, n: h.n, s: h.s, fundLabel: f.name, fundColor: f.color, benchShort: f.benchShort, pxStr: '$' + this._num(h.px), dayStr: this._sign(h.chg) + '%', dayColor: this._col(h.chg), dayArrow: h.chg >= 0 ? '▲' : '▼', descr: h.desc, loStr: h.lo != null ? '$' + h.lo : '—', hiStr: h.hi != null ? '$' + h.hi : '—', rangePos: (h.lo != null && h.hi != null) ? Math.max(0, Math.min(100, (h.px - h.lo) / ((h.hi - h.lo) || 1) * 100)).toFixed(0) + '%' : '50%' }
+      const mcStr = h.mc != null ? '$' + (h.mc >= 1000 ? (h.mc / 1000).toFixed(2) + 'T' : h.mc.toFixed(0) + 'B') : '—'
+      const prevClose = h.chg != null ? h.px / (1 + h.chg / 100) : h.px
+      const dayAbs = h.px - prevClose
+      v.stk = {
+        t: h.t, n: h.n, s: h.s, initial: (h.t || '?')[0], industry: h.s,
+        fundLabel: f.name, fundColor: f.color, benchShort: f.benchShort,
+        pxStr: '$' + this._num(h.px), dayStr: this._sign(h.chg) + '%', dayAbs: '(' + this._sign(dayAbs, 2).replace('+', '+$').replace('-', '-$') + ')',
+        dayColor: this._col(h.chg), dayArrow: h.chg >= 0 ? '▲' : '▼',
+        asof: 'As of ' + String(st.data.asOf).slice(0, 10), descr: h.desc,
+        loStr: h.lo != null ? '$' + h.lo : '—', hiStr: h.hi != null ? '$' + h.hi : '—',
+        rangePos: (h.lo != null && h.hi != null) ? Math.max(0, Math.min(100, (h.px - h.lo) / ((h.hi - h.lo) || 1) * 100)).toFixed(0) + '%' : '50%',
+      }
       const lines = []
       if (sseries && sseries.close) lines.push({ values: sseries.close, color: f.color, area: true })
       const bs = (st.series[`fund:${h.fund}:${per}`] || {}).bench
       if (bs && bs.values && bs.values.length) lines.push({ values: bs.values, color: '#5d6a85', width: 1.4, dash: '4 4' })
-      v.stkChartEl = this._chart('stk' + h.t + per, lines, 200)
-      v.stkStats = [
-        { l: 'Market Cap', v: h.mc != null ? '$' + (h.mc >= 1000 ? (h.mc / 1000).toFixed(2) + 'T' : h.mc.toFixed(0) + 'B') : '—', c: '#cdd6e8' },
-        { l: 'Fwd P/E', v: h.pe ? h.pe.toFixed(1) : '—', c: '#cdd6e8' },
-        { l: 'Price / Book', v: h.pb ? h.pb.toFixed(1) : '—', c: '#cdd6e8' },
-        { l: 'Div Yield', v: h.dy != null ? h.dy.toFixed(2) + '%' : '—', c: '#cdd6e8' },
-        { l: 'Beta (3Y)', v: h.beta != null ? h.beta.toFixed(2) : '—', c: '#cdd6e8' },
-        { l: 'MTD', v: this._sign(h.mtd, 1) + '%', c: this._col(h.mtd) },
-        { l: 'Day', v: this._sign(h.chg) + '%', c: this._col(h.chg) },
-        { l: '52W Range', v: (h.lo != null ? '$' + h.lo + '–' + h.hi : '—'), c: '#cdd6e8' },
+      v.stkChartEl = this._chart('stk' + h.t + per, lines, 230)
+      v.stkChartLegend = [
+        { mark: '●', color: f.color, label: h.t },
+        { mark: '┄', color: '#5d6a85', label: f.benchShort },
       ]
+      v.stkSnapshot = [
+        { l: 'Market Cap', v: mcStr, size: '17px' },
+        { l: 'Fwd P/E', v: h.pe ? h.pe.toFixed(1) : '—', size: '17px' },
+        { l: 'Price / Book', v: h.pb ? h.pb.toFixed(1) : '—', size: '17px' },
+        { l: 'Div Yield', v: h.dy != null ? h.dy.toFixed(2) + '%' : '—', size: '17px' },
+        { l: 'Beta (3Y)', v: h.beta != null ? h.beta.toFixed(2) : '—', size: '17px' },
+        { l: '52W Range', v: (h.lo != null ? '$' + h.lo + '–' + h.hi : '—'), size: '14px' },
+      ]
+      v.stkFacts = [
+        { l: 'Sector', v: h.s || '—', color: '#cdd6e8' },
+        { l: 'Fund', v: f.name, color: '#cdd6e8' },
+        { l: 'Portfolio Weight', v: h.w.toFixed(1) + '%', color: '#cdd6e8' },
+        { l: 'Beta (3Y)', v: h.beta != null ? h.beta.toFixed(2) : '—', color: '#cdd6e8' },
+        { l: 'Day Change', v: this._sign(h.chg) + '%', color: this._col(h.chg) },
+        { l: 'MTD Return', v: this._sign(h.mtd, 1) + '%', color: this._col(h.mtd) },
+      ]
+      const tabKey = st.stkTab || 'overview'
+      v.stkTab = tabKey
+      v.stkDetail = st.stkDetail[st.ticker]
+      v.stkTabs = [['overview', 'Overview'], ['financials', 'Financials'], ['earnings', 'Earnings'], ['news', 'News'], ['research', 'Research']]
+        .map(([k, label]) => ({
+          key: k, label, on: () => this.setState({ stkTab: k }),
+          weight: k === tabKey ? 600 : 500, color: k === tabKey ? '#e8edf7' : '#6b7794',
+          border: k === tabKey ? '2px solid #5a93f9' : '2px solid transparent',
+        }))
       const val = (h.w / 100) * f.aum, ctb = (h.w / 100) * h.mtd
       v.stkPos = { weightStr: h.w.toFixed(1) + '%', valueStr: '$' + val.toFixed(2) + 'M', sharesStr: Math.round(val * 1e6 / h.px).toLocaleString('en-US'), contribStr: this._sign(ctb, 2) + ' pp', contribColor: this._col(ctb) }
       v.stkBackLabel = st.prevView === 'stocks' ? 'All Holdings' : (st.prevView === 'sector' ? (st.sector || 'Sector') : 'Dashboard')

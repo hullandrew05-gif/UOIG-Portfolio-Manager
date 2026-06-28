@@ -9,6 +9,8 @@ export const getSeries = (ticker, period) =>
   fetch(`${BASE}/api/series/${encodeURIComponent(ticker)}?period=${period}`).then(j)
 export const getFundSeries = (fund, period) =>
   fetch(`${BASE}/api/fund-series/${fund}?period=${period}`).then(j)
+export const getStock = (ticker) =>
+  fetch(`${BASE}/api/stock/${encodeURIComponent(ticker)}`).then(j)
 export const postChat = (messages) =>
   fetch(`${BASE}/api/chat`, {
     method: 'POST',

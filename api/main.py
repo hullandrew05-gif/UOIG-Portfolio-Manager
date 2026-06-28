@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from api.build import FUND_META, build_terminal_data  # noqa: E402
 from src.analytics.pnl import load_positions  # noqa: E402
+from src.ingest.research import stock_research  # noqa: E402
 from src.analytics.risk import daily_returns_matrix  # noqa: E402
 from src.analytics.series import (price_frame, period_return, synthetic_index,  # noqa: E402
                                   ticker_series)
@@ -84,6 +85,16 @@ def fund_series(fund: str, period: str = "YTD"):
         return {"fund": syn, "bench": {"dates": bs["dates"], "values": bvals, "ticker": bench}}
     finally:
         conn.close()
+
+
+@app.get("/api/stock/{ticker}")
+def stock_detail(ticker: str):
+    """Live yfinance research for the stock-detail tabs (financials, earnings,
+    news, analysts). Cached in-process; see src/ingest/research.py."""
+    try:
+        return stock_research(ticker.upper())
+    except Exception as exc:  # noqa: BLE001 — surface upstream failure as 502
+        raise HTTPException(502, f"research fetch failed: {exc}")
 
 
 @app.post("/api/chat")
