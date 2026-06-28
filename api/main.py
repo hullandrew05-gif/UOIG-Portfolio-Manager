@@ -17,6 +17,8 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from api.build import FUND_META, build_terminal_data  # noqa: E402
 from src.analytics.pnl import load_positions  # noqa: E402
 from src.ingest.research import stock_research  # noqa: E402
+from src.ingest.lookup import (search_symbols, quote_overview,  # noqa: E402
+                               live_series)
 from src.ingest.predictions import stock_predictions  # noqa: E402
 from src.ingest.thesis import stock_thesis  # noqa: E402
 from src.assistant import answer as llm_answer, api_key as llm_key  # noqa: E402
@@ -62,12 +64,35 @@ def series(ticker: str, period: str = "YTD"):
     try:
         pf = price_frame(conn)
         s = ticker_series(pf, ticker, period)
-        if not s["close"]:
-            raise HTTPException(404, f"no series for {ticker}")
-        return {"ticker": ticker, "period": period,
-                "ret": period_return(pf, ticker, period), **s}
+        if s["close"]:
+            return {"ticker": ticker, "period": period,
+                    "ret": period_return(pf, ticker, period), **s}
     finally:
         conn.close()
+    # Not a portfolio holding — pull a live series straight from yfinance.
+    live = live_series(ticker, period)
+    if not live["close"]:
+        raise HTTPException(404, f"no series for {ticker}")
+    return {"ticker": ticker.upper(), "period": period, **live}
+
+
+@app.get("/api/search")
+def search(q: str = "", limit: int = 8):
+    """Yahoo Finance symbol search (equities only) for the global search box."""
+    return {"results": search_symbols(q, limit)}
+
+
+@app.get("/api/quote/{ticker}")
+def quote(ticker: str):
+    """Live overview for any equity, so off-portfolio tickers can open a stock
+    page. Returns 404 for non-equities / unknown symbols."""
+    try:
+        ov = quote_overview(ticker)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"quote fetch failed: {exc}")
+    if ov is None:
+        raise HTTPException(404, f"no equity quote for {ticker}")
+    return ov
 
 
 @app.get("/api/fund-series/{fund}")

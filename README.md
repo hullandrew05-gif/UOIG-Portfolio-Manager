@@ -20,6 +20,28 @@ data/       SQLite store (generated; git-ignored)
 scripts/    seed / reconcile / refresh / fundamentals
 ```
 
+## API
+The frontend talks to these JSON endpoints (Vite proxies `/api` to `:8000` in dev):
+
+| Endpoint | What |
+|---|---|
+| `GET /api/data` | Funds, holdings, sectors snapshot (DB-backed) |
+| `GET /api/series/{ticker}?period=` | Price series — DB for holdings, **live yfinance fallback** for any other ticker |
+| `GET /api/fund-series/{fund}?period=` | Synthetic fund index vs benchmark |
+| `GET /api/search?q=` | **Yahoo Finance symbol search, equities only** (powers the global search box) |
+| `GET /api/quote/{ticker}` | **Live overview for any equity** (price, P/E, sector, 52-wk, description); 404 for non-equities |
+| `GET /api/stock/{ticker}` | Financials / earnings / news / analyst research (live yfinance) |
+| `GET /api/predictions/{ticker}` | Kalshi prediction-market cards |
+| `GET /api/thesis/{ticker}` | Team's written thesis |
+| `POST /api/chat` | Ask-Claude turn (Anthropic API) |
+
+**Search any equity.** The header search box queries Yahoo Finance live: type a name
+or ticker, pick a result, and the stock page populates for *any* equity — not just
+portfolio holdings. Held names show a "Held" badge and the full position panel; an
+off-portfolio name shows a "Not held" card with the same live price/fundamentals.
+The search-and-lookup path (`src/ingest/lookup.py`) is yfinance only — it does **not**
+use the Anthropic API.
+
 ## Run it (development — hot reload)
 Two processes; the Vite dev server proxies `/api` to the backend.
 ```bash
@@ -65,6 +87,7 @@ Tests: `python tests/test_reconcile.py && python tests/test_pnl.py && python tes
 | A Backend API | done | FastAPI + fundamentals enrichment |
 | B–D Terminal UI | done | Pixel-faithful React terminal; Ask-Claude stubbed |
 | E Packaging | done | Single-container Docker, this runbook, Streamlit retired |
+| F Global search | done | Yahoo Finance search + live quote/series; any equity opens a stock page (`src/ingest/lookup.py`) |
 | Later | | Live Ask-Claude (Anthropic API); migrate to Vercel + Supabase (Postgres) |
 
 ## Handoff notes (for the next PM)

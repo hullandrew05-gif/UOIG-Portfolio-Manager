@@ -1,5 +1,5 @@
 import React from 'react'
-import { getData, getSeries, getFundSeries, getStock, getPredictions, getThesis, postChat } from './api.js'
+import { getData, getSeries, getFundSeries, getStock, getPredictions, getThesis, postChat, searchTickers, getQuote } from './api.js'
 
 // UOIG sector taxonomy: the five groups the club uses, each rolling up one or
 // more yfinance GICS sectors. Order here is the board's column order.
@@ -44,7 +44,10 @@ export default class App extends React.Component {
       stkDetail: {},  // cache: ticker -> {financials, earnings, news, research} | 'loading' | 'error'
       predictions: {},  // cache: ticker -> {cards} | 'loading' | 'error'
       theses: {},  // cache: ticker -> {thesis} | 'loading' | 'error'
+      quotes: {},  // cache: ticker -> overview {t,n,s,px,...} | 'loading' | 'error' (off-portfolio names)
+      searchQ: '', searchResults: [], searchOpen: false, searchActive: -1,
     }
+    this._searchSeq = 0
   }
 
   componentDidMount() {
@@ -147,8 +150,66 @@ export default class App extends React.Component {
   // ---------- navigation ----------
   _go(view) { this.setState({ view }) }
   _setFund(k) { try { localStorage.setItem('uoig.fund', k) } catch (e) { /* ignore */ } this.setState({ fund: k }) }
-  _openStock(t, from) { this.setState({ view: 'stock', ticker: t, prevView: from || this.state.view }) }
+  _openStock(t, from) {
+    const tk = (t || '').toUpperCase()
+    this.setState({ view: 'stock', ticker: tk, prevView: from || this.state.view, stkTab: 'overview' },
+      () => this._ensureQuote(tk))
+  }
   _openSector(name, from) { this.setState({ view: 'sector', sector: name, prevView: from || this.state.view }) }
+
+  // ---------- global search (Yahoo Finance + local holdings) ----------
+  _localMatches(q) {
+    if (!this.state.data) return []
+    const s2 = q.trim().toLowerCase()
+    if (!s2) return []
+    const seen = new Set(), out = []
+    this.allH.forEach((h) => {
+      if (seen.has(h.t)) return
+      if (h.t.toLowerCase().includes(s2) || (h.n || '').toLowerCase().includes(s2)) {
+        seen.add(h.t)
+        out.push({ symbol: h.t, name: h.n, exchange: (this.funds[h.fund] || {}).name || '', held: true })
+      }
+    })
+    return out.slice(0, 6)
+  }
+  _onSearchChange(q) {
+    const local = this._localMatches(q)
+    this.setState({ searchQ: q, searchOpen: true, searchActive: -1, searchResults: local })
+    const seq = ++this._searchSeq
+    clearTimeout(this._searchTimer)
+    if (!q.trim()) return
+    this._searchTimer = setTimeout(() => {
+      searchTickers(q).then((res) => {
+        if (seq !== this._searchSeq) return  // a newer keystroke superseded this one
+        const have = new Set(local.map((r) => r.symbol))
+        const remote = (res.results || []).filter((r) => !have.has(r.symbol)).map((r) => ({ ...r, remote: true }))
+        this.setState({ searchResults: [...local, ...remote] })
+      }).catch(() => {})
+    }, 180)
+  }
+  _searchSelect(symbol) {
+    if (!symbol) return
+    this._searchSeq++  // invalidate any in-flight search
+    clearTimeout(this._searchTimer)
+    this.setState({ searchOpen: false, searchQ: '', searchResults: [], searchActive: -1 })
+    this._openStock(symbol, this.state.view)
+  }
+  _searchKey(e) {
+    const { searchResults, searchActive, searchOpen } = this.state
+    if (e.key === 'Escape') { this.setState({ searchOpen: false, searchActive: -1 }); return }
+    if (!searchOpen || !searchResults.length) {
+      if (e.key === 'Enter' && this.state.searchQ.trim()) this._searchSelect(this.state.searchQ.trim().toUpperCase())
+      return
+    }
+    if (e.key === 'ArrowDown') { e.preventDefault(); this.setState({ searchActive: Math.min(searchActive + 1, searchResults.length - 1) }) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); this.setState({ searchActive: Math.max(searchActive - 1, 0) }) }
+    else if (e.key === 'Enter') {
+      e.preventDefault()
+      const pick = searchActive >= 0 ? searchResults[searchActive] : searchResults[0]
+      if (pick) this._searchSelect(pick.symbol)
+      else if (this.state.searchQ.trim()) this._searchSelect(this.state.searchQ.trim().toUpperCase())
+    }
+  }
 
   // ---------- series fetching ----------
   _ensureSeries() {
@@ -169,6 +230,7 @@ export default class App extends React.Component {
       p.then((res) => this.setState((st) => ({ series: { ...st.series, [key]: res } }))).catch(() => {})
     })
     this._ensureStockDetail()
+    if (this.state.view === 'stock') this._ensureQuote()
   }
 
   // ---------- stock-detail tabs (live yfinance) ----------
@@ -189,6 +251,18 @@ export default class App extends React.Component {
     getPredictions(ticker)
       .then((res) => this.setState((st) => ({ predictions: { ...st.predictions, [ticker]: res } })))
       .catch(() => this.setState((st) => ({ predictions: { ...st.predictions, [ticker]: 'error' } })))
+  }
+
+  // Off-portfolio tickers have no holding row — pull a live overview so the
+  // stock page (price, snapshot, business) can render. Held names use the DB.
+  _ensureQuote(t) {
+    const tk = t || this.state.ticker
+    if (!tk || (this.state.data && this.byT[tk])) return
+    if (this.state.quotes[tk]) return
+    this.setState((st) => ({ quotes: { ...st.quotes, [tk]: 'loading' } }))
+    getQuote(tk)
+      .then((res) => this.setState((st) => ({ quotes: { ...st.quotes, [tk]: res } })))
+      .catch(() => this.setState((st) => ({ quotes: { ...st.quotes, [tk]: 'error' } })))
   }
 
   _ensureThesis() {
@@ -283,7 +357,7 @@ export default class App extends React.Component {
     const ctb = (h.w / 100) * h.mtd
     const fund = this.funds[h.fund] || {}
     return {
-      t: h.t, n: h.n, s: h.s, fundTag: fund.tag || h.fund, fundColor: fund.color || '#5a93f9',
+      t: h.t, rk: (h.fund || '') + ':' + h.t, n: h.n, s: h.s, fundTag: fund.tag || h.fund, fundColor: fund.color || '#5a93f9',
       wStr: h.w.toFixed(1) + '%', pxStr: this._num(h.px), mvStr: this._kd(h.mv),
       dayStr: this._sign(h.chg) + '%', dayColor: this._col(h.chg),
       mtdStr: this._sign(h.mtd, 1) + '%', mtdColor: this._col(h.mtd),
@@ -306,10 +380,30 @@ export default class App extends React.Component {
             <img src="/uoig-logo.png" alt="UOIG" style={s('width:26px;height:26px;object-fit:contain;background:#fff;border-radius:5px;padding:2px;')} />
             <div style={s("font:600 14px 'IBM Plex Sans';color:#e8edf7;")}>University of Oregon Investment Group</div>
           </div>
-          <div onClick={() => this._go('stocks')} style={s('display:flex;align-items:center;gap:8px;background:#0e1422;border:1px solid #1d2840;border-radius:7px;padding:7px 11px;width:320px;margin-left:10px;cursor:pointer;')}>
-            <svg width="13" height="13" viewBox="0 0 16 16" style={{ fill: 'none', stroke: '#5d6a85', strokeWidth: 1.6 }}><circle cx="7" cy="7" r="4.5"></circle><line x1="11" y1="11" x2="14.5" y2="14.5" style={{ strokeLinecap: 'round' }}></line></svg>
-            <span style={s('font-size:11.5px;color:#5d6a85;')}>Search ticker, fund, sector…</span>
-            <span style={s("margin-left:auto;font-family:'IBM Plex Mono';font-size:10px;color:#3c465e;border:1px solid #1d2840;border-radius:3px;padding:1px 5px;")}>⌘K</span>
+          <div style={s('position:relative;width:320px;margin-left:10px;')}>
+            <div style={{ ...s('display:flex;align-items:center;gap:8px;background:#0e1422;border-radius:7px;padding:7px 11px;'), border: '1px solid ' + (this.state.searchOpen ? '#28406e' : '#1d2840') }}>
+              <svg width="13" height="13" viewBox="0 0 16 16" style={{ fill: 'none', stroke: '#5d6a85', strokeWidth: 1.6 }}><circle cx="7" cy="7" r="4.5"></circle><line x1="11" y1="11" x2="14.5" y2="14.5" style={{ strokeLinecap: 'round' }}></line></svg>
+              <input value={this.state.searchQ} onChange={(e) => this._onSearchChange(e.target.value)}
+                onFocus={() => { if (this.state.searchResults.length) this.setState({ searchOpen: true }) }}
+                onBlur={() => setTimeout(() => this.setState({ searchOpen: false }), 150)}
+                onKeyDown={(e) => this._searchKey(e)}
+                placeholder="Search any equity on Yahoo Finance…"
+                style={s("flex:1;min-width:0;background:transparent;border:none;outline:none;color:#e8edf7;font:400 11.5px 'IBM Plex Sans';")} />
+              <span style={s("font-family:'IBM Plex Mono';font-size:10px;color:#3c465e;border:1px solid #1d2840;border-radius:3px;padding:1px 5px;flex:0 0 auto;")}>↵</span>
+            </div>
+            {this.state.searchOpen && this.state.searchResults.length > 0 && (
+              <div style={s('position:absolute;top:40px;left:0;right:0;background:#0b1120;border:1px solid #1d2840;border-radius:8px;box-shadow:0 16px 40px rgba(0,0,0,.55);overflow:hidden;overflow-y:auto;max-height:360px;z-index:80;')}>
+                {this.state.searchResults.map((r, i) => (
+                  <div key={r.symbol} onMouseDown={(e) => { e.preventDefault(); this._searchSelect(r.symbol) }}
+                    onMouseEnter={() => this.setState({ searchActive: i })}
+                    style={{ ...s('display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;border-bottom:1px solid #131c2f;'), background: i === this.state.searchActive ? '#13203a' : 'transparent' }}>
+                    <span style={s("font-family:'IBM Plex Mono';font-weight:600;font-size:12px;color:#e8edf7;width:66px;flex:0 0 auto;overflow:hidden;text-overflow:ellipsis;")}>{r.symbol}</span>
+                    <span style={s('flex:1;min-width:0;font-size:11.5px;color:#9aa7c2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{r.name}</span>
+                    <span style={{ ...s("font:600 8px 'IBM Plex Sans';letter-spacing:.05em;text-transform:uppercase;border-radius:4px;padding:2px 6px;flex:0 0 auto;"), color: r.held ? '#5a93f9' : '#6b7794', border: '1px solid ' + (r.held ? '#28406e' : '#1d2840') }}>{r.held ? 'Held' : (r.exchange || 'Yahoo')}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div style={s('display:flex;background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:3px;gap:2px;margin-left:10px;')}>
             {v.fundTabs.map((t) => (<span key={t.k} onClick={t.on} style={{ ...s("padding:6px 15px;border-radius:6px;cursor:pointer;font-size:11.5px;font-family:'IBM Plex Sans';"), fontWeight: t.weight, background: t.bg, color: t.color }}>{t.label}</span>))}
@@ -317,7 +411,6 @@ export default class App extends React.Component {
           <div style={s('flex:1;')}></div>
           <div style={s("display:flex;align-items:center;gap:7px;font-family:'IBM Plex Mono';font-size:11px;color:#9aa7c2;")}><span style={s('width:7px;height:7px;border-radius:50%;background:#21d07a;animation:pulseDot 2s infinite;')}></span>MARKETS OPEN</div>
           <div style={s("font-family:'IBM Plex Mono';font-size:11px;color:#6b7794;")}>{v.asOf}</div>
-          <div style={s("width:28px;height:28px;border-radius:50%;background:#13203a;border:1px solid #24345a;display:flex;align-items:center;justify-content:center;font:600 10.5px 'IBM Plex Sans';color:#9aa7c2;")}>PM</div>
         </div>
 
         {/* BODY */}
@@ -327,6 +420,7 @@ export default class App extends React.Component {
             {v.nav.map((item) => (
               <div key={item.key} onClick={item.on} title={item.label} className="dc-hover" style={{ ...s('width:40px;height:38px;border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;'), background: item.bg, color: item.color }}>{item.icon}</div>
             ))}
+            <div title="Profile" style={s("margin-top:auto;width:28px;height:28px;border-radius:50%;background:#13203a;border:1px solid #24345a;display:flex;align-items:center;justify-content:center;font:600 10.5px 'IBM Plex Sans';color:#9aa7c2;")}>PM</div>
           </div>
 
           {/* MAIN */}
@@ -334,7 +428,7 @@ export default class App extends React.Component {
             {v.isDashboard && this._renderDashboard(v)}
             {v.isStocks && this._renderStocks(v)}
             {v.isSectors && this._renderSectors(v)}
-            {v.isStock && v.stk && this._renderStock(v)}
+            {v.isStock && (v.stk ? this._renderStock(v) : this._renderStockMsg(v))}
             {v.isSector && v.sec && this._renderSector(v)}
           </div>
 
@@ -419,7 +513,7 @@ export default class App extends React.Component {
             <div style={s('display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #1d2840;')}><span style={s("font:600 10.5px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;")}>{v.dashTitle}</span><span style={s("font-family:'IBM Plex Mono';font-size:9.5px;color:#5d6a85;")}>{v.dashCount}</span></div>
             <div style={s("display:grid;grid-template-columns:62px 1fr 50px 54px 70px 78px 60px 64px;gap:8px;padding:8px 14px;border-bottom:1px solid #1d2840;font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;")}><span>Ticker</span><span>Name</span><span style={s('text-align:right;')}>Fund</span><span style={s('text-align:right;')}>Wt</span><span style={s('text-align:right;')}>Val</span><span style={s('text-align:right;')}>Price</span><span style={s('text-align:right;')}>Day</span><span style={s('text-align:right;')}>Contrib</span></div>
             {v.dashHoldings.map((r) => (
-              <div key={r.t} onClick={r.open} className="dc-row" style={s('display:grid;grid-template-columns:62px 1fr 50px 54px 70px 78px 60px 64px;gap:8px;align-items:center;padding:7.5px 14px;border-bottom:1px solid #131c2f;font-size:11px;cursor:pointer;')}>
+              <div key={r.rk} onClick={r.open} className="dc-row" style={s('display:grid;grid-template-columns:62px 1fr 50px 54px 70px 78px 60px 64px;gap:8px;align-items:center;padding:7.5px 14px;border-bottom:1px solid #131c2f;font-size:11px;cursor:pointer;')}>
                 <span style={s("font-family:'IBM Plex Mono';font-weight:600;color:#e8edf7;")}>{r.t}</span>
                 <span style={s('color:#9aa7c2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{r.n}</span>
                 <span style={{ ...s("text-align:right;font:500 9px 'IBM Plex Mono';"), color: r.fundColor }}>{r.fundTag}</span>
@@ -469,7 +563,7 @@ export default class App extends React.Component {
             {v.stocksHead.map((h, i) => (<span key={i} onClick={h.on} style={{ ...s('cursor:pointer;'), textAlign: h.align, color: h.color }}>{h.label}{h.caret}</span>))}
           </div>
           {v.stocksRows.map((r) => (
-            <div key={r.t} onClick={r.open} className="dc-row" style={s('display:grid;grid-template-columns:74px 1fr 150px 64px 70px 86px 92px 72px 72px 60px;gap:8px;align-items:center;padding:7.5px 14px;border-bottom:1px solid #131c2f;font-size:11px;cursor:pointer;')}>
+            <div key={r.rk} onClick={r.open} className="dc-row" style={s('display:grid;grid-template-columns:74px 1fr 150px 64px 70px 86px 92px 72px 72px 60px;gap:8px;align-items:center;padding:7.5px 14px;border-bottom:1px solid #131c2f;font-size:11px;cursor:pointer;')}>
               <span style={s("font-family:'IBM Plex Mono';font-weight:600;color:#e8edf7;")}>{r.t}</span>
               <span style={s('color:#9aa7c2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{r.n}</span>
               <span style={s('color:#6b7794;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{r.s}</span>
@@ -508,7 +602,7 @@ export default class App extends React.Component {
                 {c.cards.length === 0
                   ? <div style={s("font-family:'IBM Plex Mono';font-size:10px;color:#3c465e;text-align:center;padding:16px 0;")}>No holdings</div>
                   : c.cards.map((r) => (
-                    <div key={r.t} onClick={r.open} className="dc-row" style={s('background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:9px 10px;cursor:pointer;')}>
+                    <div key={r.rk} onClick={r.open} className="dc-row" style={s('background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:9px 10px;cursor:pointer;')}>
                       <div style={s('display:flex;justify-content:space-between;align-items:center;gap:6px;')}>
                         <span style={s("font-family:'IBM Plex Mono';font-weight:600;font-size:12.5px;color:#e8edf7;")}>{r.t}</span>
                         <span style={{ ...s("font:500 8.5px 'IBM Plex Mono';letter-spacing:.04em;"), color: r.fundColor }}>{r.fundTag}</span>
@@ -764,6 +858,20 @@ export default class App extends React.Component {
     )
   }
 
+  _renderStockMsg(v) {
+    const err = v.stkErr
+    return (
+      <div style={s('padding:18px;display:flex;flex-direction:column;gap:15px;')}>
+        <div onClick={() => this._go(this.state.prevView || 'dashboard')} style={s("display:inline-flex;align-items:center;gap:6px;font:500 11px 'IBM Plex Sans';color:#6b7794;cursor:pointer;width:fit-content;")}>‹ {v.stkBackLabel || 'Back'}</div>
+        <div style={s('display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;padding:80px 12px;color:#5d6a85;')}>
+          <span style={s('font-size:26px;color:#3c4a66;')}>{err ? '⚠' : '✦'}</span>
+          <div style={s("font:600 13px 'IBM Plex Sans';color:#8290ad;")}>{err ? 'No equity found' : 'Loading ' + (this.state.ticker || '') + '…'}</div>
+          <div style={s("font:400 11px/1.55 'IBM Plex Sans';max-width:360px;")}>{err ? 'Yahoo Finance has no equity matching “' + (this.state.ticker || '') + '”. Check the symbol and try the search box again.' : 'Pulling live quote, price history and fundamentals from Yahoo Finance.'}</div>
+        </div>
+      </div>
+    )
+  }
+
   _renderStock(v) {
     const stk = v.stk
     return (
@@ -825,13 +933,20 @@ export default class App extends React.Component {
             </div>
             <div style={s('display:flex;flex-direction:column;gap:14px;')}>
               <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
-                <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;margin-bottom:13px;")}>Position in {stk.fundLabel}</div>
+                <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;margin-bottom:13px;")}>{v.stkPos ? 'Position in ' + stk.fundLabel : 'Portfolio Position'}</div>
+                {!v.stkPos ? (
+                  <div style={s('display:flex;flex-direction:column;gap:8px;')}>
+                    <div style={s("display:inline-flex;align-items:center;gap:7px;width:fit-content;font:600 9px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#9aa7c2;background:#13203a;border:1px solid #24345a;border-radius:5px;padding:4px 9px;")}><span style={s('width:6px;height:6px;border-radius:50%;background:#6b7794;')}></span>Not held</div>
+                    <div style={s("font:400 11.5px/1.6 'IBM Plex Sans';color:#8290ad;")}>{stk.t} is not currently held in the Tall Firs or Alumni Fund. This is a live Yahoo Finance lookup for research.</div>
+                  </div>
+                ) : (
                 <div style={s('display:flex;flex-direction:column;gap:12px;')}>
                   <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Portfolio weight</span><span style={s("font-family:'IBM Plex Mono';font-size:16px;color:#e8edf7;")}>{v.stkPos.weightStr}</span></div>
                   <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Market value</span><span style={s("font-family:'IBM Plex Mono';font-size:16px;color:#e8edf7;")}>{v.stkPos.valueStr}</span></div>
                   <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Shares</span><span style={s("font-family:'IBM Plex Mono';font-size:14px;color:#cdd6e8;")}>{v.stkPos.sharesStr}</span></div>
                   <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Contribution MTD</span><span style={{ ...s("font-family:'IBM Plex Mono';font-size:14px;"), color: v.stkPos.contribColor }}>{v.stkPos.contribStr}</span></div>
                 </div>
+                )}
               </div>
               <div style={s('background:linear-gradient(180deg,#140f2c,#0c0d1f);border:1px solid #241f3e;border-radius:9px;padding:15px;')}>
                 <div style={s("display:flex;align-items:center;gap:7px;font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#c3b9ff;margin-bottom:11px;")}><span style={s('font-size:13px;')}>✦</span>Ask Claude about {stk.t}</div>
@@ -866,7 +981,7 @@ export default class App extends React.Component {
           <div style={s("padding:10px 14px;border-bottom:1px solid #1d2840;font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;")}>Holdings in {sec.name}</div>
           <div style={s("display:grid;grid-template-columns:74px 1fr 64px 70px 92px 72px 72px;gap:8px;padding:8px 14px;border-bottom:1px solid #1d2840;font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;")}><span>Ticker</span><span>Name</span><span style={s('text-align:right;')}>Fund</span><span style={s('text-align:right;')}>Wt</span><span style={s('text-align:right;')}>Price</span><span style={s('text-align:right;')}>Day</span><span style={s('text-align:right;')}>MTD</span></div>
           {v.secRows.map((r) => (
-            <div key={r.t} onClick={r.open} className="dc-row" style={s('display:grid;grid-template-columns:74px 1fr 64px 70px 92px 72px 72px;gap:8px;align-items:center;padding:7.5px 14px;border-bottom:1px solid #131c2f;font-size:11px;cursor:pointer;')}>
+            <div key={r.rk} onClick={r.open} className="dc-row" style={s('display:grid;grid-template-columns:74px 1fr 64px 70px 92px 72px 72px;gap:8px;align-items:center;padding:7.5px 14px;border-bottom:1px solid #131c2f;font-size:11px;cursor:pointer;')}>
               <span style={s("font-family:'IBM Plex Mono';font-weight:600;color:#e8edf7;")}>{r.t}</span>
               <span style={s('color:#9aa7c2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{r.n}</span>
               <span style={{ ...s("text-align:right;font:500 9px 'IBM Plex Mono';"), color: r.fundColor }}>{r.fundTag}</span>
@@ -891,8 +1006,8 @@ export default class App extends React.Component {
     v.isSectors = st.view === 'sectors'; v.isStock = st.view === 'stock'; v.isSector = st.view === 'sector'
     v.fundAName = F[fundA].name; v.fundBName = F[fundB].name
 
-    const navDef = [['dash', 'Dashboard', 'dashboard'], ['funds', 'Funds', 'dashboard'], ['stocks', 'Stocks', 'stocks'], ['sectors', 'Sectors', 'sectors']]
-    const activeMap = { dashboard: ['dash', 'funds'], stocks: ['stocks'], sectors: ['sectors'], stock: ['stocks'], sector: ['sectors'] }
+    const navDef = [['funds', 'Funds', 'dashboard'], ['stocks', 'Stocks', 'stocks'], ['sectors', 'Sectors', 'sectors']]
+    const activeMap = { dashboard: ['funds'], stocks: ['stocks'], sectors: ['sectors'], stock: ['stocks'], sector: ['sectors'] }
     v.nav = navDef.map(([id, label, go]) => {
       const active = (activeMap[st.view] || []).indexOf(id) >= 0
       return { key: id, label, icon: this._icon(id, active), bg: active ? '#13203a' : 'transparent', color: active ? '#5a93f9' : '#5d6a85', on: () => this._go(go) }
@@ -1005,66 +1120,92 @@ export default class App extends React.Component {
       }
     })
 
-    // stock detail
-    if (st.view === 'stock' && this.byT[st.ticker]) {
-      const h = this.byT[st.ticker], f = F[h.fund]
-      const sseries = st.series[`stk:${st.ticker}:${per}`]
-      const mcStr = h.mc != null ? '$' + (h.mc >= 1000 ? (h.mc / 1000).toFixed(2) + 'T' : h.mc.toFixed(0) + 'B') : '—'
-      const prevClose = h.chg != null ? h.px / (1 + h.chg / 100) : h.px
-      const dayAbs = h.px - prevClose
-      v.stk = {
-        t: h.t, n: h.n, s: h.s, initial: (h.t || '?')[0], industry: h.s,
-        fundLabel: f.name, fundColor: f.color, benchShort: f.benchShort,
-        pxStr: '$' + this._num(h.px), dayStr: this._sign(h.chg) + '%', dayAbs: '(' + this._sign(dayAbs, 2).replace('+', '+$').replace('-', '-$') + ')',
-        dayColor: this._col(h.chg), dayArrow: h.chg >= 0 ? '▲' : '▼',
-        asof: 'As of ' + String(st.data.asOf).slice(0, 10), descr: h.desc,
-        loStr: h.lo != null ? '$' + h.lo : '—', hiStr: h.hi != null ? '$' + h.hi : '—',
-        rangePos: (h.lo != null && h.hi != null) ? Math.max(0, Math.min(100, (h.px - h.lo) / ((h.hi - h.lo) || 1) * 100)).toFixed(0) + '%' : '50%',
+    // stock detail — a portfolio holding (rich, DB-backed) or any equity looked
+    // up live on Yahoo Finance (quote-backed). The page renders for both.
+    if (st.view === 'stock') {
+      const heldH = this.byT[st.ticker]
+      const qstate = st.quotes[st.ticker]
+      const quoteObj = (qstate && qstate !== 'loading' && qstate !== 'error') ? qstate : null
+      v.stkLoading = !heldH && (qstate === 'loading' || qstate === undefined)
+      v.stkErr = !heldH && qstate === 'error'
+      const h = heldH || quoteObj
+      if (h) {
+        const held = !!heldH
+        const f = held ? F[h.fund] : null
+        const accent = f ? f.color : '#5a93f9'
+        const sseries = st.series[`stk:${st.ticker}:${per}`]
+        const mcStr = h.mc != null ? '$' + (h.mc >= 1000 ? (h.mc / 1000).toFixed(2) + 'T' : h.mc.toFixed(0) + 'B') : '—'
+        const hasChg = h.chg != null
+        const prevClose = hasChg ? h.px / (1 + h.chg / 100) : h.px
+        const dayAbs = h.px - prevClose
+        v.stk = {
+          t: h.t, n: h.n, s: h.s || '—', initial: (h.t || '?')[0], industry: (held ? h.s : (h.industry || h.s)) || '—',
+          held, fundLabel: held ? f.name : (h.exchange || 'Yahoo Finance'), fundColor: accent,
+          benchShort: f ? f.benchShort : 'Live quote',
+          pxStr: '$' + this._num(h.px),
+          dayStr: hasChg ? this._sign(h.chg) + '%' : '—',
+          dayAbs: hasChg ? '(' + this._sign(dayAbs, 2).replace('+', '+$').replace('-', '-$') + ')' : '',
+          dayColor: hasChg ? this._col(h.chg) : '#9aa7c2', dayArrow: hasChg ? (h.chg >= 0 ? '▲' : '▼') : '',
+          asof: held ? 'As of ' + String(st.data.asOf).slice(0, 10) : 'Live · Yahoo Finance',
+          descr: h.desc || 'No company description available from Yahoo Finance.',
+          loStr: h.lo != null ? '$' + h.lo : '—', hiStr: h.hi != null ? '$' + h.hi : '—',
+          rangePos: (h.lo != null && h.hi != null) ? Math.max(0, Math.min(100, (h.px - h.lo) / ((h.hi - h.lo) || 1) * 100)).toFixed(0) + '%' : '50%',
+        }
+        const lines = []
+        if (sseries && sseries.close) lines.push({ values: sseries.close, color: accent, area: true })
+        const bs = held ? (st.series[`fund:${h.fund}:${per}`] || {}).bench : null
+        if (bs && bs.values && bs.values.length) lines.push({ values: bs.values, color: '#5d6a85', width: 1.4, dash: '4 4' })
+        v.stkChartEl = this._chart('stk' + h.t + per, lines, 230)
+        v.stkChartLegend = [{ mark: '●', color: accent, label: h.t }]
+        if (held) v.stkChartLegend.push({ mark: '┄', color: '#5d6a85', label: f.benchShort })
+        v.stkSnapshot = [
+          { l: 'Market Cap', v: mcStr, size: '17px' },
+          { l: 'Fwd P/E', v: h.pe ? h.pe.toFixed(1) : '—', size: '17px' },
+          { l: 'Price / Book', v: h.pb ? h.pb.toFixed(1) : '—', size: '17px' },
+          { l: 'Div Yield', v: h.dy != null ? h.dy.toFixed(2) + '%' : '—', size: '17px' },
+          { l: 'Beta (3Y)', v: h.beta != null ? h.beta.toFixed(2) : '—', size: '17px' },
+          { l: '52W Range', v: (h.lo != null ? '$' + h.lo + '–' + h.hi : '—'), size: '14px' },
+        ]
+        v.stkFacts = held ? [
+          { l: 'Sector', v: h.s || '—', color: '#cdd6e8' },
+          { l: 'Fund', v: f.name, color: '#cdd6e8' },
+          { l: 'Portfolio Weight', v: h.w.toFixed(1) + '%', color: '#cdd6e8' },
+          { l: 'Beta (3Y)', v: h.beta != null ? h.beta.toFixed(2) : '—', color: '#cdd6e8' },
+          { l: 'Day Change', v: this._sign(h.chg) + '%', color: this._col(h.chg) },
+          { l: 'MTD Return', v: this._sign(h.mtd, 1) + '%', color: this._col(h.mtd) },
+        ] : [
+          { l: 'Sector', v: h.s || '—', color: '#cdd6e8' },
+          { l: 'Industry', v: h.industry || '—', color: '#cdd6e8' },
+          { l: 'Exchange', v: h.exchange || '—', color: '#cdd6e8' },
+          { l: 'Beta', v: h.beta != null ? h.beta.toFixed(2) : '—', color: '#cdd6e8' },
+          { l: 'Day Change', v: hasChg ? this._sign(h.chg) + '%' : '—', color: hasChg ? this._col(h.chg) : '#cdd6e8' },
+          { l: 'Div Yield', v: h.dy != null ? h.dy.toFixed(2) + '%' : '—', color: '#cdd6e8' },
+        ]
+        const tabKey = st.stkTab || 'overview'
+        v.stkTab = tabKey
+        v.stkDetail = st.stkDetail[st.ticker]
+        v.predDetail = st.predictions[st.ticker]
+        v.thesisDetail = st.theses[st.ticker]
+        v.stkTabs = [['overview', 'Overview'], ['thesis', 'Thesis'], ['financials', 'Financials'], ['earnings', 'Earnings'], ['news', 'News'], ['research', 'Research'], ['predictions', 'Predictions']]
+          .map(([k, label]) => ({
+            key: k, label, on: () => this.setState({ stkTab: k }),
+            weight: k === tabKey ? 600 : 500, color: k === tabKey ? '#e8edf7' : '#6b7794',
+            border: k === tabKey ? '2px solid #5a93f9' : '2px solid transparent',
+          }))
+        if (held) {
+          const ctb = (h.w / 100) * h.mtd
+          v.stkPos = { weightStr: h.w.toFixed(1) + '%', valueStr: this._kd(h.mv), sharesStr: (h.sh != null ? Math.round(h.sh).toLocaleString('en-US') : '—'), contribStr: this._sign(ctb, 2) + ' pp', contribColor: this._col(ctb) }
+        } else {
+          v.stkPos = null
+        }
+        v.stkBackLabel = st.prevView === 'stocks' ? 'All Holdings' : (st.prevView === 'sector' ? (st.sector || 'Sector') : 'Dashboard')
+        v.stkAskChips = [
+          { text: 'What’s the bull and bear case for ' + h.t + '?', on: () => this._send('What’s the bull and bear case for ' + h.t + '?') },
+          { text: 'Is the ' + (h.pe ? h.pe.toFixed(0) : '') + 'x P/E justified?', on: () => this._send('Is ' + h.t + '’s P/E justified given its growth and risk?') },
+          held ? { text: 'How does it fit the ' + f.name + ' mandate?', on: () => this._send('How does ' + h.t + ' fit the ' + f.name + ' mandate?') }
+               : { text: 'Would ' + h.t + ' fit our mandate?', on: () => this._send('Would ' + h.t + ' fit the UOIG mandate? It is not currently held.') },
+        ]
       }
-      const lines = []
-      if (sseries && sseries.close) lines.push({ values: sseries.close, color: f.color, area: true })
-      const bs = (st.series[`fund:${h.fund}:${per}`] || {}).bench
-      if (bs && bs.values && bs.values.length) lines.push({ values: bs.values, color: '#5d6a85', width: 1.4, dash: '4 4' })
-      v.stkChartEl = this._chart('stk' + h.t + per, lines, 230)
-      v.stkChartLegend = [
-        { mark: '●', color: f.color, label: h.t },
-        { mark: '┄', color: '#5d6a85', label: f.benchShort },
-      ]
-      v.stkSnapshot = [
-        { l: 'Market Cap', v: mcStr, size: '17px' },
-        { l: 'Fwd P/E', v: h.pe ? h.pe.toFixed(1) : '—', size: '17px' },
-        { l: 'Price / Book', v: h.pb ? h.pb.toFixed(1) : '—', size: '17px' },
-        { l: 'Div Yield', v: h.dy != null ? h.dy.toFixed(2) + '%' : '—', size: '17px' },
-        { l: 'Beta (3Y)', v: h.beta != null ? h.beta.toFixed(2) : '—', size: '17px' },
-        { l: '52W Range', v: (h.lo != null ? '$' + h.lo + '–' + h.hi : '—'), size: '14px' },
-      ]
-      v.stkFacts = [
-        { l: 'Sector', v: h.s || '—', color: '#cdd6e8' },
-        { l: 'Fund', v: f.name, color: '#cdd6e8' },
-        { l: 'Portfolio Weight', v: h.w.toFixed(1) + '%', color: '#cdd6e8' },
-        { l: 'Beta (3Y)', v: h.beta != null ? h.beta.toFixed(2) : '—', color: '#cdd6e8' },
-        { l: 'Day Change', v: this._sign(h.chg) + '%', color: this._col(h.chg) },
-        { l: 'MTD Return', v: this._sign(h.mtd, 1) + '%', color: this._col(h.mtd) },
-      ]
-      const tabKey = st.stkTab || 'overview'
-      v.stkTab = tabKey
-      v.stkDetail = st.stkDetail[st.ticker]
-      v.predDetail = st.predictions[st.ticker]
-      v.thesisDetail = st.theses[st.ticker]
-      v.stkTabs = [['overview', 'Overview'], ['thesis', 'Thesis'], ['financials', 'Financials'], ['earnings', 'Earnings'], ['news', 'News'], ['research', 'Research'], ['predictions', 'Predictions']]
-        .map(([k, label]) => ({
-          key: k, label, on: () => this.setState({ stkTab: k }),
-          weight: k === tabKey ? 600 : 500, color: k === tabKey ? '#e8edf7' : '#6b7794',
-          border: k === tabKey ? '2px solid #5a93f9' : '2px solid transparent',
-        }))
-      const ctb = (h.w / 100) * h.mtd
-      v.stkPos = { weightStr: h.w.toFixed(1) + '%', valueStr: this._kd(h.mv), sharesStr: (h.sh != null ? Math.round(h.sh).toLocaleString('en-US') : '—'), contribStr: this._sign(ctb, 2) + ' pp', contribColor: this._col(ctb) }
-      v.stkBackLabel = st.prevView === 'stocks' ? 'All Holdings' : (st.prevView === 'sector' ? (st.sector || 'Sector') : 'Dashboard')
-      v.stkAskChips = [
-        { text: 'What’s the bull and bear case for ' + h.t + '?', on: () => this._send('What’s the bull and bear case for ' + h.t + '?') },
-        { text: 'Is the ' + (h.pe ? h.pe.toFixed(0) : '') + 'x P/E justified?', on: () => this._send('Is ' + h.t + '’s P/E justified given its growth and risk?') },
-        { text: 'How does it fit the ' + f.name + ' mandate?', on: () => this._send('How does ' + h.t + ' fit the ' + f.name + ' mandate?') },
-      ]
     }
 
     // sector detail
@@ -1079,7 +1220,7 @@ export default class App extends React.Component {
 
     // claude dock
     let ctxLabel = 'Portfolio', ctxShort = 'the portfolio', sugg = []
-    if (st.view === 'stock' && this.byT[st.ticker]) { const h = this.byT[st.ticker]; ctxLabel = h.t + ' · ' + h.n.slice(0, 16); ctxShort = h.t; sugg = ['What’s driving ' + h.t + ' today?', 'Summarize the bull vs bear case', 'What are the key risks to watch?'] }
+    if (st.view === 'stock' && v.stk) { const h = v.stk; ctxLabel = h.t + ' · ' + (h.n || '').slice(0, 16); ctxShort = h.t; sugg = ['What’s driving ' + h.t + ' today?', 'Summarize the bull vs bear case', 'What are the key risks to watch?'] }
     else if (st.view === 'sector' && agg[st.sector]) { ctxLabel = 'Sector · ' + st.sector; ctxShort = st.sector; sugg = ['What’s our outlook on ' + st.sector + '?', 'Are we over- or under-weight here?', 'Which holding has the most upside?'] }
     else { const lbl = fk === 'all' ? 'Combined' : F[fk].name; ctxLabel = lbl + ' · ' + per; ctxShort = 'this fund'; sugg = ['Why are we beating the benchmark?', 'Compare the two funds’ risk', 'Where is our biggest concentration?'] }
     v.ctxLabel = ctxLabel; v.ctxShort = ctxShort

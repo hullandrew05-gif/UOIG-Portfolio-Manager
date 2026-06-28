@@ -11,6 +11,10 @@ export const getFundSeries = (fund, period) =>
   fetch(`${BASE}/api/fund-series/${fund}?period=${period}`).then(j)
 export const getStock = (ticker) =>
   fetch(`${BASE}/api/stock/${encodeURIComponent(ticker)}`).then(j)
+export const searchTickers = (q) =>
+  fetch(`${BASE}/api/search?q=${encodeURIComponent(q)}`).then(j)
+export const getQuote = (ticker) =>
+  fetch(`${BASE}/api/quote/${encodeURIComponent(ticker)}`).then(j)
 export const getPredictions = (ticker) =>
   fetch(`${BASE}/api/predictions/${encodeURIComponent(ticker)}`).then(j)
 export const getThesis = (ticker) =>

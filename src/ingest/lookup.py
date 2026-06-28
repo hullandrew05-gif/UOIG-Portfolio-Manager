@@ -1,0 +1,181 @@
+"""Live Yahoo Finance lookup for arbitrary equities (search + quote + series).
+
+Powers the terminal's global search box and lets any equity ticker — not just a
+portfolio holding — open a populated stock page. Everything here is read-only
+yfinance; results are cached in-process for a few minutes so re-querying is cheap.
+
+Three public helpers:
+  search_symbols(q)   -> [{symbol, name, exchange}]  (equities only)
+  quote_overview(t)   -> overview dict mirroring api/build.py holding fields
+  live_series(t, per) -> {dates, close, ret}  (same shape as analytics.series)
+"""
+from __future__ import annotations
+
+import datetime as dt
+import math
+import time
+
+import pandas as pd
+import yfinance as yf
+
+from src.ingest.providers import to_yf
+
+_SEARCH_CACHE: dict[str, tuple[float, list]] = {}
+_QUOTE_CACHE: dict[str, tuple[float, dict]] = {}
+_SERIES_CACHE: dict[str, tuple[float, dict]] = {}
+_TTL = 300  # seconds
+
+# yfinance history() period / interval per terminal period button.
+_YF_PERIOD = {"1M": "1mo", "3M": "3mo", "6M": "6mo", "YTD": "ytd", "1Y": "1y", "5Y": "5y"}
+
+
+def _num(v):
+    try:
+        f = float(v)
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    except (TypeError, ValueError):
+        return None
+
+
+# ---------- search ----------
+def search_symbols(query: str, limit: int = 8) -> list[dict]:
+    """Yahoo Finance search, restricted to equities. Empty list on any failure."""
+    q = (query or "").strip()
+    if len(q) < 1:
+        return []
+    key = f"{q.lower()}|{limit}"
+    hit = _SEARCH_CACHE.get(key)
+    now = time.time()
+    if hit and (now - hit[0]) < _TTL:
+        return hit[1]
+
+    out: list[dict] = []
+    try:
+        res = yf.Search(q, max_results=max(limit * 3, 12), news_count=0)
+        for r in (res.quotes or []):
+            if r.get("quoteType") != "EQUITY":
+                continue
+            sym = r.get("symbol")
+            if not sym:
+                continue
+            name = r.get("longname") or r.get("shortname") or sym
+            exch = r.get("exchDisp") or r.get("exchange") or ""
+            out.append({"symbol": sym, "name": name, "exchange": exch})
+            if len(out) >= limit:
+                break
+    except Exception:  # noqa: BLE001 — search is best-effort
+        out = []
+
+    _SEARCH_CACHE[key] = (now, out)
+    return out
+
+
+# ---------- quote / overview ----------
+def quote_overview(ticker: str) -> dict | None:
+    """Overview fields for any equity, shaped like a holding row so the stock
+    page can render off-portfolio names. Returns None if not a real equity."""
+    t = ticker.upper()
+    now = time.time()
+    hit = _QUOTE_CACHE.get(t)
+    if hit and (now - hit[0]) < _TTL:
+        return hit[1]
+
+    tk = yf.Ticker(to_yf(t))
+    try:
+        info = tk.info or {}
+    except Exception:  # noqa: BLE001
+        info = {}
+
+    qtype = info.get("quoteType")
+    px = _num(info.get("currentPrice")) or _num(info.get("regularMarketPrice"))
+    if px is None:
+        try:
+            px = _num(tk.fast_info.get("last_price"))
+        except Exception:  # noqa: BLE001
+            px = None
+    # Reject non-equities and dead symbols (no price / no type).
+    if not info or qtype not in (None, "EQUITY") or px is None:
+        if qtype is not None and qtype != "EQUITY":
+            _QUOTE_CACHE[t] = (now, None)
+            return None
+    if px is None:
+        _QUOTE_CACHE[t] = (now, None)
+        return None
+
+    prev = _num(info.get("regularMarketPreviousClose")) or _num(info.get("previousClose"))
+    chg = ((px - prev) / prev * 100) if (prev and px is not None) else _num(info.get("regularMarketChangePercent"))
+
+    mc = _num(info.get("marketCap"))
+    pe = _num(info.get("forwardPE")) or _num(info.get("trailingPE"))
+    pb = _num(info.get("priceToBook"))
+    beta = _num(info.get("beta"))
+
+    # Dividend yield -> percent. yfinance has used both fractions and percents;
+    # prefer the trailing rate / price, fall back to the reported yield field.
+    rate = _num(info.get("trailingAnnualDividendRate")) or _num(info.get("dividendRate"))
+    if rate is not None and px:
+        dy = rate / px * 100
+    else:
+        raw = _num(info.get("dividendYield"))
+        dy = (raw if (raw is not None and raw > 1) else (raw * 100 if raw is not None else None))
+
+    lo = _num(info.get("fiftyTwoWeekLow"))
+    hi = _num(info.get("fiftyTwoWeekHigh"))
+
+    payload = {
+        "t": t,
+        "n": info.get("longName") or info.get("shortName") or t,
+        "s": info.get("sector"),
+        "industry": info.get("industry"),
+        "exchange": info.get("fullExchangeName") or info.get("exchange") or "",
+        "px": round(px, 2),
+        "chg": round(chg, 2) if chg is not None else None,
+        "mc": round(mc / 1e9, 2) if mc is not None else None,  # billions
+        "pe": round(pe, 2) if pe is not None else None,
+        "pb": round(pb, 2) if pb is not None else None,
+        "dy": round(dy, 2) if dy is not None else None,
+        "beta": round(beta, 2) if beta is not None else None,
+        "lo": round(lo, 2) if lo is not None else None,
+        "hi": round(hi, 2) if hi is not None else None,
+        "desc": info.get("longBusinessSummary"),
+        "currency": info.get("currency") or "USD",
+        "held": False,
+    }
+    _QUOTE_CACHE[t] = (now, payload)
+    return payload
+
+
+# ---------- live price series ----------
+def live_series(ticker: str, period: str = "YTD", points: int = 64) -> dict:
+    """Live yfinance price series for any ticker (charts off-portfolio names)."""
+    t = ticker.upper()
+    per = period if period in _YF_PERIOD else "YTD"
+    key = f"{t}|{per}"
+    now = time.time()
+    hit = _SERIES_CACHE.get(key)
+    if hit and (now - hit[0]) < _TTL:
+        return hit[1]
+
+    try:
+        h = yf.Ticker(to_yf(t)).history(period=_YF_PERIOD[per], interval="1d", auto_adjust=False)
+    except Exception:  # noqa: BLE001
+        h = pd.DataFrame()
+
+    if h is None or h.empty or "Close" not in h:
+        out = {"dates": [], "close": [], "ret": None}
+        _SERIES_CACHE[key] = (now, out)
+        return out
+
+    sub = h.dropna(subset=["Close"])
+    closes = [round(float(x), 2) for x in sub["Close"].to_numpy()]
+    dates = [d.date().isoformat() for d in sub.index]
+    if len(closes) > points:
+        step = (len(closes) - 1) / (points - 1)
+        idx = sorted({round(i * step) for i in range(points)})
+        closes = [closes[i] for i in idx]
+        dates = [dates[i] for i in idx]
+    ret = (closes[-1] / closes[0] - 1) if len(closes) >= 2 and closes[0] else None
+
+    out = {"dates": dates, "close": closes, "ret": ret}
+    _SERIES_CACHE[key] = (now, out)
+    return out
