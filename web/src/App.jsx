@@ -1,5 +1,19 @@
 import React from 'react'
-import { getData, getSeries, getFundSeries, getStock, postChat } from './api.js'
+import { getData, getSeries, getFundSeries, getStock, getPredictions, getThesis, postChat } from './api.js'
+
+// UOIG sector taxonomy: the five groups the club uses, each rolling up one or
+// more yfinance GICS sectors. Order here is the board's column order.
+const SECTOR_GROUPS = [
+  { name: 'TMT', color: '#5a93f9', members: ['Technology', 'Communication Services'] },
+  { name: 'IME', color: '#f4a531', members: ['Industrials', 'Utilities', 'Basic Materials', 'Energy'] },
+  { name: 'Healthcare', color: '#21d07a', members: ['Healthcare'] },
+  { name: 'Financial', color: '#c06fd6', members: ['Financial Services', 'Real Estate'] },
+  { name: 'Consumer', color: '#e8674c', members: ['Consumer Defensive', 'Consumer Cyclical'] },
+]
+const SECTOR_OF = {}
+SECTOR_GROUPS.forEach((g) => g.members.forEach((m) => (SECTOR_OF[m] = g)))
+const GROUP_COLOR = {}
+SECTOR_GROUPS.forEach((g) => (GROUP_COLOR[g.name] = g.color))
 
 // Parse a design CSS string into a React style object (keeps styles verbatim).
 function s(css) {
@@ -21,13 +35,15 @@ export default class App extends React.Component {
     this.chatRef = React.createRef()
     this.state = {
       data: null, error: null,
-      view: 'dashboard', fund: null, period: 'YTD',
+      view: 'dashboard', fund: (typeof localStorage !== 'undefined' && localStorage.getItem('uoig.fund')) || 'all', period: 'YTD',
       ticker: null, sector: null, prevView: 'dashboard',
-      stkTab: 'overview',
+      stkTab: 'overview', chatOpen: false,
       sortKey: 'w', sortDir: 'desc', query: '',
       chat: [], input: '', loading: false,
       series: {},  // cache: key -> {dates, values/close, ...}
       stkDetail: {},  // cache: ticker -> {financials, earnings, news, research} | 'loading' | 'error'
+      predictions: {},  // cache: ticker -> {cards} | 'loading' | 'error'
+      theses: {},  // cache: ticker -> {thesis} | 'loading' | 'error'
     }
   }
 
@@ -35,7 +51,8 @@ export default class App extends React.Component {
     getData()
       .then((data) => {
         const keys = Object.keys(data.funds)
-        this.setState({ data, fund: keys[0] || 'all' }, this._ensureSeries)
+        const fund = ['all', ...keys].includes(this.state.fund) ? this.state.fund : 'all'
+        this.setState({ data, fund }, this._ensureSeries)
       })
       .catch(() => this.setState({ error: 'Could not reach the API. Is the backend running on :8000?' }))
   }
@@ -44,6 +61,8 @@ export default class App extends React.Component {
     if (prev.view !== this.state.view && this.mainRef.current) this.mainRef.current.scrollTop = 0
     if (prev.view !== this.state.view || prev.fund !== this.state.fund ||
         prev.period !== this.state.period || prev.ticker !== this.state.ticker) this._ensureSeries()
+    if (prev.stkTab !== this.state.stkTab || prev.view !== this.state.view ||
+        prev.ticker !== this.state.ticker) { this._ensurePredictions(); this._ensureThesis() }
     const pl = (prev.chat && prev.chat.length) || 0
     if (this.chatRef.current && (pl !== this.state.chat.length || prev.loading !== this.state.loading))
       this.chatRef.current.scrollTop = this.chatRef.current.scrollHeight
@@ -71,35 +90,63 @@ export default class App extends React.Component {
     const t = this.total || 1
     return this.fundKeys.reduce((s2, k) => s2 + (getter(this.funds[k]) || 0) * (this.funds[k].aum || 0), 0) / t
   }
-  _aggSectors() {
+  // Map a yfinance GICS sector to its UOIG group name (null for ETFs/unmapped).
+  _group(sector) { return (SECTOR_OF[sector] || {}).name || null }
+
+  _aggSectors(fk) {
+    const all = !fk || fk === 'all'
+    const pool = all ? this.allH : this.allH.filter((h) => h.fund === fk)
     const agg = {}
-    this.allH.forEach((h) => {
-      const a = agg[h.s] || (agg[h.s] = { name: h.s, count: 0, holdings: [], wSum: 0, wret: 0, wByFund: {} })
+    pool.forEach((h) => {
+      const g = SECTOR_OF[h.s]
+      if (!g) return  // ETFs / unmapped sectors are not part of the five groups
+      const a = agg[g.name] || (agg[g.name] = { name: g.name, color: g.color, members: g.members, count: 0, holdings: [], wSum: 0, wret: 0, wByFund: {} })
       a.count++; a.holdings.push(h); a.wSum += h.w; a.wret += h.w * h.mtd
       a.wByFund[h.fund] = (a.wByFund[h.fund] || 0) + h.w
     })
     Object.values(agg).forEach((a) => {
       a.ret = a.wSum ? a.wret / a.wSum : 0
-      a.dollar = this.fundKeys.reduce((s2, k) => s2 + (a.wByFund[k] || 0) / 100 * this.funds[k].aum, 0)
-      a.share = this.total ? a.dollar / this.total * 100 : 0
+      if (all) {
+        // blended share of the whole endowment by dollars
+        a.dollar = this.fundKeys.reduce((s2, k) => s2 + (a.wByFund[k] || 0) / 100 * this.funds[k].aum, 0)
+        a.share = this.total ? a.dollar / this.total * 100 : 0
+      } else {
+        // share relative to the selected fund (its weight within that fund)
+        a.dollar = (a.wByFund[fk] || 0) / 100 * this.funds[fk].aum
+        a.share = a.wSum
+      }
     })
     return agg
   }
   _fundSectors(fk) {
     const hs = fk === 'all' ? this.allH : this.allH.filter((h) => h.fund === fk)
     const m = {}; let tot = 0
-    hs.forEach((h) => { m[h.s] = (m[h.s] || 0) + h.w; tot += h.w })
+    hs.forEach((h) => { const g = SECTOR_OF[h.s]; if (!g) return; m[g.name] = (m[g.name] || 0) + h.w; tot += h.w })
     return Object.keys(m).map((name) => ({ name, w: m[name], pct: tot ? m[name] / tot * 100 : 0 }))
       .sort((a, b) => b.w - a.w)
   }
 
   // ---------- formatting ----------
   _num(n) { return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) }
+  // Fund/holding dollar amounts: billions ≥ $1B ($1.20B), millions ≥ $1M ($2.74M), else thousands ($93K). Input is USD.
+  _kd(dollars) {
+    const d = Number(dollars) || 0, a = Math.abs(d)
+    if (a >= 1e9) return '$' + (d / 1e9).toFixed(2) + 'B'
+    if (a >= 1e6) return '$' + (d / 1e6).toFixed(2) + 'M'
+    return '$' + Math.round(d / 1000).toLocaleString('en-US') + 'K'
+  }
+  _kdSigned(dollars) {
+    const d = Number(dollars) || 0, a = Math.abs(d), sign = d >= 0 ? '+' : '-'
+    if (a >= 1e9) return sign + '$' + (a / 1e9).toFixed(2) + 'B'
+    if (a >= 1e6) return sign + '$' + (a / 1e6).toFixed(2) + 'M'
+    return sign + '$' + Math.round(a / 1000).toLocaleString('en-US') + 'K'
+  }
   _sign(x, d) { return (x >= 0 ? '+' : '') + Number(x).toFixed(d === undefined ? 2 : d) }
   _col(x) { return x >= 0 ? '#21d07a' : '#ff5666' }
 
   // ---------- navigation ----------
   _go(view) { this.setState({ view }) }
+  _setFund(k) { try { localStorage.setItem('uoig.fund', k) } catch (e) { /* ignore */ } this.setState({ fund: k }) }
   _openStock(t, from) { this.setState({ view: 'stock', ticker: t, prevView: from || this.state.view }) }
   _openSector(name, from) { this.setState({ view: 'sector', sector: name, prevView: from || this.state.view }) }
 
@@ -134,6 +181,25 @@ export default class App extends React.Component {
       .catch(() => this.setState((st) => ({ stkDetail: { ...st.stkDetail, [ticker]: 'error' } })))
   }
 
+  // Predictions are a separate, heavier Kalshi pull — fetch only when that tab is opened.
+  _ensurePredictions() {
+    const { view, ticker, stkTab } = this.state
+    if (view !== 'stock' || stkTab !== 'predictions' || !ticker || this.state.predictions[ticker]) return
+    this.setState((st) => ({ predictions: { ...st.predictions, [ticker]: 'loading' } }))
+    getPredictions(ticker)
+      .then((res) => this.setState((st) => ({ predictions: { ...st.predictions, [ticker]: res } })))
+      .catch(() => this.setState((st) => ({ predictions: { ...st.predictions, [ticker]: 'error' } })))
+  }
+
+  _ensureThesis() {
+    const { view, ticker, stkTab } = this.state
+    if (view !== 'stock' || stkTab !== 'thesis' || !ticker || this.state.theses[ticker]) return
+    this.setState((st) => ({ theses: { ...st.theses, [ticker]: 'loading' } }))
+    getThesis(ticker)
+      .then((res) => this.setState((st) => ({ theses: { ...st.theses, [ticker]: res } })))
+      .catch(() => this.setState((st) => ({ theses: { ...st.theses, [ticker]: 'error' } })))
+  }
+
   // ---------- charts ----------
   _chart(key, lines, h) {
     const w = 900, all = []
@@ -164,7 +230,7 @@ export default class App extends React.Component {
   _donut(arr) {
     const cols = ['#5a93f9', '#6aa6ff', '#8ea8f2', '#21d07a', '#f4a531', '#c06fd6']
     const top = arr.slice(0, 5), other = arr.slice(5).reduce((s2, x) => s2 + x.pct, 0)
-    const segs = top.map((x, i) => ({ c: cols[i], pct: x.pct })); if (other > 0.1) segs.push({ c: '#3a4a6a', pct: other })
+    const segs = top.map((x, i) => ({ c: x.color || cols[i], pct: x.pct })); if (other > 0.1) segs.push({ c: '#3a4a6a', pct: other })
     let acc = 0
     const stops = segs.map((sg) => { const a = acc, b = acc + sg.pct; acc = b; return sg.c + ' ' + a.toFixed(1) + '% ' + b.toFixed(1) + '%' }).join(', ')
     return React.createElement('div', { style: { width: '108px', height: '108px', borderRadius: '50%', background: 'conic-gradient(' + stops + ')', position: 'relative', flex: '0 0 auto' } },
@@ -192,13 +258,21 @@ export default class App extends React.Component {
       </span>
     ))
   }
+  _chatContext() {
+    const st = this.state
+    if (st.view === 'stock' && this.byT[st.ticker]) { const h = this.byT[st.ticker]; return h.t + ' — ' + h.n + ' (' + h.s + ', ' + (this.funds[h.fund] || {}).name + ')' }
+    if (st.view === 'sector') return 'the ' + st.sector + ' sector'
+    const f = st.fund === 'all' ? 'both funds combined' : (this.funds[st.fund] || {}).name
+    return st.view + ' view · ' + f + ' · ' + st.period
+  }
   async _send(text) {
     const q = (text != null ? text : this.state.input).trim()
     if (!q || this.state.loading) return
+    const ctx = this._chatContext()
     const chat = this.state.chat.concat([{ role: 'user', content: q }])
-    this.setState({ chat, input: '', loading: true })
+    this.setState({ chat, input: '', loading: true, chatOpen: true })
     try {
-      const res = await postChat(chat)
+      const res = await postChat(chat, ctx)
       this.setState((st) => ({ chat: st.chat.concat([{ role: 'assistant', content: res.reply || '(no response)' }]), loading: false }))
     } catch (e) {
       this.setState((st) => ({ chat: st.chat.concat([{ role: 'assistant', content: '⚠ Could not reach the assistant.' }]), loading: false }))
@@ -210,7 +284,7 @@ export default class App extends React.Component {
     const fund = this.funds[h.fund] || {}
     return {
       t: h.t, n: h.n, s: h.s, fundTag: fund.tag || h.fund, fundColor: fund.color || '#5a93f9',
-      wStr: h.w.toFixed(1) + '%', pxStr: this._num(h.px),
+      wStr: h.w.toFixed(1) + '%', pxStr: this._num(h.px), mvStr: this._kd(h.mv),
       dayStr: this._sign(h.chg) + '%', dayColor: this._col(h.chg),
       mtdStr: this._sign(h.mtd, 1) + '%', mtdColor: this._col(h.mtd),
       peStr: h.pe ? h.pe.toFixed(1) : '—',
@@ -237,6 +311,9 @@ export default class App extends React.Component {
             <span style={s('font-size:11.5px;color:#5d6a85;')}>Search ticker, fund, sector…</span>
             <span style={s("margin-left:auto;font-family:'IBM Plex Mono';font-size:10px;color:#3c465e;border:1px solid #1d2840;border-radius:3px;padding:1px 5px;")}>⌘K</span>
           </div>
+          <div style={s('display:flex;background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:3px;gap:2px;margin-left:10px;')}>
+            {v.fundTabs.map((t) => (<span key={t.k} onClick={t.on} style={{ ...s("padding:6px 15px;border-radius:6px;cursor:pointer;font-size:11.5px;font-family:'IBM Plex Sans';"), fontWeight: t.weight, background: t.bg, color: t.color }}>{t.label}</span>))}
+          </div>
           <div style={s('flex:1;')}></div>
           <div style={s("display:flex;align-items:center;gap:7px;font-family:'IBM Plex Mono';font-size:11px;color:#9aa7c2;")}><span style={s('width:7px;height:7px;border-radius:50%;background:#21d07a;animation:pulseDot 2s infinite;')}></span>MARKETS OPEN</div>
           <div style={s("font-family:'IBM Plex Mono';font-size:11px;color:#6b7794;")}>{v.asOf}</div>
@@ -261,12 +338,17 @@ export default class App extends React.Component {
             {v.isSector && v.sec && this._renderSector(v)}
           </div>
 
-          {/* CLAUDE DOCK — hidden for now (flip false→true to restore) */}
-          {false && (
-          <div style={s('flex:0 0 322px;border-left:1px solid #241f3e;background:#0b0d1d;display:flex;flex-direction:column;min-height:0;')}>
+        </div>
+
+        {/* ASK-CLAUDE POPUP */}
+        {this.state.chatOpen && (
+          <div style={s('position:fixed;right:22px;bottom:88px;width:374px;height:560px;max-height:calc(100vh - 120px);background:#0b0d1d;border:1px solid #241f3e;border-radius:16px;box-shadow:0 26px 64px rgba(0,0,0,.55);display:flex;flex-direction:column;overflow:hidden;z-index:60;')}>
             <div style={s('display:flex;align-items:center;justify-content:space-between;padding:13px 14px;border-bottom:1px solid #241f3e;background:linear-gradient(180deg,#140f2c,#0b0d1d);flex:0 0 auto;')}>
               <div style={s("display:flex;align-items:center;gap:8px;font:600 11px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#c3b9ff;")}><span style={s('font-size:15px;')}>✦</span>Ask Claude</div>
-              <span onClick={() => this.setState({ chat: [] })} style={s('font-size:9px;color:#7a6fb5;border:1px solid #2c2550;border-radius:5px;padding:3px 8px;cursor:pointer;')}>CLEAR</span>
+              <div style={s('display:flex;align-items:center;gap:7px;')}>
+                <span onClick={() => this.setState({ chat: [] })} style={s('font-size:9px;color:#7a6fb5;border:1px solid #2c2550;border-radius:5px;padding:3px 8px;cursor:pointer;')}>CLEAR</span>
+                <span onClick={() => this.setState({ chatOpen: false })} style={s('width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:13px;color:#7a6fb5;border:1px solid #2c2550;border-radius:5px;cursor:pointer;')}>✕</span>
+              </div>
             </div>
             <div style={s('padding:9px 13px;border-bottom:1px solid #1a1730;display:flex;align-items:center;gap:7px;flex:0 0 auto;')}><span style={s('font-size:8.5px;color:#7a6fb5;text-transform:uppercase;letter-spacing:.06em;')}>Context</span><span style={s('font-size:9.5px;color:#c3b9ff;background:#15112c;border:1px solid #2c2550;border-radius:5px;padding:3px 9px;')}>{v.ctxLabel}</span></div>
             <div ref={this.chatRef} style={s('flex:1;padding:14px 13px;display:flex;flex-direction:column;gap:11px;overflow-y:auto;min-height:0;')}>
@@ -274,7 +356,7 @@ export default class App extends React.Component {
                 <div style={s('display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;margin:auto 0;color:#6b7794;padding:0 6px;')}>
                   <span style={s('font-size:24px;color:#5a4fd6;')}>✦</span>
                   <div style={s("font:600 12.5px 'IBM Plex Sans';color:#b8aef0;")}>Your research co-pilot</div>
-                  <div style={s('font-size:11px;line-height:1.55;')}>Ask anything about a fund, holding, or sector. (Stubbed — live model coming in Phase D.)</div>
+                  <div style={s('font-size:11px;line-height:1.55;')}>Ask anything about a fund, holding, or sector — I know the live portfolio.</div>
                 </div>
               )}
               {v.chatMsgs.map((m) => (
@@ -294,8 +376,10 @@ export default class App extends React.Component {
               </div>
             </div>
           </div>
-          )}
-        </div>
+        )}
+
+        {/* ASK-CLAUDE FAB */}
+        <div onClick={() => this.setState((st) => ({ chatOpen: !st.chatOpen }))} title="Ask Claude" style={{ ...s('position:fixed;right:22px;bottom:22px;width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#fff;font-size:23px;z-index:61;box-shadow:0 12px 30px rgba(90,79,214,.5);'), background: this.state.chatOpen ? '#2c2550' : 'linear-gradient(135deg,#5a4fd6,#3a31a8)' }}>{this.state.chatOpen ? '✕' : '✦'}</div>
       </div>
     )
   }
@@ -304,14 +388,6 @@ export default class App extends React.Component {
   _renderDashboard(v) {
     return (
       <div style={s('padding:16px;display:flex;flex-direction:column;gap:13px;')}>
-        <div style={s('display:flex;align-items:center;justify-content:space-between;')}>
-          <div style={s('display:flex;background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:3px;gap:2px;')}>
-            {v.fundTabs.map((t) => (<span key={t.k} onClick={t.on} style={{ ...s("padding:7px 18px;border-radius:6px;cursor:pointer;font-size:12px;font-family:'IBM Plex Sans';"), fontWeight: t.weight, background: t.bg, color: t.color }}>{t.label}</span>))}
-          </div>
-          <div style={s('display:flex;align-items:center;gap:3px;background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:3px;')}>
-            {v.periods.map((p) => (<span key={p.k} onClick={p.on} style={{ ...s("padding:5px 10px;border-radius:5px;cursor:pointer;font-size:10px;font-family:'IBM Plex Mono';"), fontWeight: p.weight, background: p.bg, color: p.color }}>{p.k}</span>))}
-          </div>
-        </div>
         {/* hero */}
         <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:17px;display:flex;flex-direction:column;')}>
           <div style={s('display:flex;justify-content:space-between;align-items:flex-start;')}>
@@ -320,8 +396,8 @@ export default class App extends React.Component {
               <div style={s("font-family:'IBM Plex Mono';font-size:36px;font-weight:500;color:#e8edf7;margin-top:5px;letter-spacing:-.01em;")}>{v.heroValue}</div>
               <div style={{ ...s("font-family:'IBM Plex Mono';font-size:13px;margin-top:3px;"), color: v.heroRetColor }}>{v.heroRetText}</div>
             </div>
-            <div style={s("display:flex;flex-direction:column;gap:5px;align-items:flex-end;font:500 10.5px 'IBM Plex Sans';")}>
-              {v.heroLegend.map((l, i) => (<span key={i} style={{ color: l.color }}>{l.mark} {l.label}</span>))}
+            <div style={s('display:flex;align-items:center;gap:3px;background:#0a0f1a;border:1px solid #1d2840;border-radius:8px;padding:3px;')}>
+              {v.periods.map((p) => (<span key={p.k} onClick={p.on} style={{ ...s("padding:5px 10px;border-radius:5px;cursor:pointer;font-size:10px;font-family:'IBM Plex Mono';"), fontWeight: p.weight, background: p.bg, color: p.color }}>{p.k}</span>))}
             </div>
           </div>
           <div style={s('height:184px;margin-top:10px;')}>{v.heroChartEl}</div>
@@ -341,13 +417,14 @@ export default class App extends React.Component {
         <div style={s('display:grid;grid-template-columns:1fr 360px;gap:13px;')}>
           <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;display:flex;flex-direction:column;overflow:hidden;')}>
             <div style={s('display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #1d2840;')}><span style={s("font:600 10.5px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;")}>{v.dashTitle}</span><span style={s("font-family:'IBM Plex Mono';font-size:9.5px;color:#5d6a85;")}>{v.dashCount}</span></div>
-            <div style={s("display:grid;grid-template-columns:62px 1fr 50px 54px 84px 66px 66px;gap:8px;padding:8px 14px;border-bottom:1px solid #1d2840;font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;")}><span>Ticker</span><span>Name</span><span style={s('text-align:right;')}>Fund</span><span style={s('text-align:right;')}>Wt</span><span style={s('text-align:right;')}>Price</span><span style={s('text-align:right;')}>Day</span><span style={s('text-align:right;')}>Contrib</span></div>
+            <div style={s("display:grid;grid-template-columns:62px 1fr 50px 54px 70px 78px 60px 64px;gap:8px;padding:8px 14px;border-bottom:1px solid #1d2840;font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;")}><span>Ticker</span><span>Name</span><span style={s('text-align:right;')}>Fund</span><span style={s('text-align:right;')}>Wt</span><span style={s('text-align:right;')}>Val</span><span style={s('text-align:right;')}>Price</span><span style={s('text-align:right;')}>Day</span><span style={s('text-align:right;')}>Contrib</span></div>
             {v.dashHoldings.map((r) => (
-              <div key={r.t} onClick={r.open} className="dc-row" style={s('display:grid;grid-template-columns:62px 1fr 50px 54px 84px 66px 66px;gap:8px;align-items:center;padding:7.5px 14px;border-bottom:1px solid #131c2f;font-size:11px;cursor:pointer;')}>
+              <div key={r.t} onClick={r.open} className="dc-row" style={s('display:grid;grid-template-columns:62px 1fr 50px 54px 70px 78px 60px 64px;gap:8px;align-items:center;padding:7.5px 14px;border-bottom:1px solid #131c2f;font-size:11px;cursor:pointer;')}>
                 <span style={s("font-family:'IBM Plex Mono';font-weight:600;color:#e8edf7;")}>{r.t}</span>
                 <span style={s('color:#9aa7c2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{r.n}</span>
                 <span style={{ ...s("text-align:right;font:500 9px 'IBM Plex Mono';"), color: r.fundColor }}>{r.fundTag}</span>
                 <span style={s("font-family:'IBM Plex Mono';text-align:right;color:#cdd6e8;")}>{r.wStr}</span>
+                <span style={s("font-family:'IBM Plex Mono';text-align:right;color:#e8edf7;")}>{r.mvStr}</span>
                 <span style={s("font-family:'IBM Plex Mono';text-align:right;color:#cdd6e8;")}>{r.pxStr}</span>
                 <span style={{ ...s("font-family:'IBM Plex Mono';text-align:right;"), color: r.dayColor }}>{r.dayStr}</span>
                 <span style={{ ...s("font-family:'IBM Plex Mono';text-align:right;"), color: r.ctbColor }}>{r.ctbStr}</span>
@@ -381,23 +458,24 @@ export default class App extends React.Component {
     return (
       <div style={s('padding:16px;display:flex;flex-direction:column;gap:13px;')}>
         <div style={s('display:flex;align-items:center;justify-content:space-between;')}>
-          <div><div style={s("font:600 17px 'IBM Plex Sans';color:#e8edf7;")}>All Holdings</div><div style={s("font-family:'IBM Plex Mono';font-size:10.5px;color:#6b7794;margin-top:3px;")}>{v.stocksCount}</div></div>
+          <div><div style={s("font:600 17px 'IBM Plex Sans';color:#e8edf7;")}>{v.stocksTitle}</div><div style={s("font-family:'IBM Plex Mono';font-size:10.5px;color:#6b7794;margin-top:3px;")}>{v.stocksCount}</div></div>
           <div style={s('display:flex;align-items:center;gap:8px;background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:8px 12px;width:280px;')}>
             <svg width="13" height="13" viewBox="0 0 16 16" style={{ fill: 'none', stroke: '#5d6a85', strokeWidth: 1.6 }}><circle cx="7" cy="7" r="4.5"></circle><line x1="11" y1="11" x2="14.5" y2="14.5" style={{ strokeLinecap: 'round' }}></line></svg>
             <input value={v.query} onChange={(e) => this.setState({ query: e.target.value })} placeholder="Filter by ticker, name, sector…" style={s("flex:1;background:transparent;border:none;outline:none;color:#e8edf7;font:400 11.5px 'IBM Plex Sans';")} />
           </div>
         </div>
         <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;overflow:hidden;')}>
-          <div style={s("display:grid;grid-template-columns:74px 1fr 150px 64px 70px 92px 72px 72px 60px;gap:8px;padding:9px 14px;border-bottom:1px solid #1d2840;font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;")}>
+          <div style={s("display:grid;grid-template-columns:74px 1fr 150px 64px 70px 86px 92px 72px 72px 60px;gap:8px;padding:9px 14px;border-bottom:1px solid #1d2840;font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;")}>
             {v.stocksHead.map((h, i) => (<span key={i} onClick={h.on} style={{ ...s('cursor:pointer;'), textAlign: h.align, color: h.color }}>{h.label}{h.caret}</span>))}
           </div>
           {v.stocksRows.map((r) => (
-            <div key={r.t} onClick={r.open} className="dc-row" style={s('display:grid;grid-template-columns:74px 1fr 150px 64px 70px 92px 72px 72px 60px;gap:8px;align-items:center;padding:7.5px 14px;border-bottom:1px solid #131c2f;font-size:11px;cursor:pointer;')}>
+            <div key={r.t} onClick={r.open} className="dc-row" style={s('display:grid;grid-template-columns:74px 1fr 150px 64px 70px 86px 92px 72px 72px 60px;gap:8px;align-items:center;padding:7.5px 14px;border-bottom:1px solid #131c2f;font-size:11px;cursor:pointer;')}>
               <span style={s("font-family:'IBM Plex Mono';font-weight:600;color:#e8edf7;")}>{r.t}</span>
               <span style={s('color:#9aa7c2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{r.n}</span>
               <span style={s('color:#6b7794;font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')}>{r.s}</span>
               <span style={{ ...s("text-align:right;font:500 9px 'IBM Plex Mono';"), color: r.fundColor }}>{r.fundTag}</span>
               <span style={s("font-family:'IBM Plex Mono';text-align:right;color:#cdd6e8;")}>{r.wStr}</span>
+              <span style={s("font-family:'IBM Plex Mono';text-align:right;color:#e8edf7;")}>{r.mvStr}</span>
               <span style={s("font-family:'IBM Plex Mono';text-align:right;color:#cdd6e8;")}>{r.pxStr}</span>
               <span style={{ ...s("font-family:'IBM Plex Mono';text-align:right;"), color: r.dayColor }}>{r.dayStr}</span>
               <span style={{ ...s("font-family:'IBM Plex Mono';text-align:right;"), color: r.mtdColor }}>{r.mtdStr}</span>
@@ -411,15 +489,38 @@ export default class App extends React.Component {
 
   _renderSectors(v) {
     return (
-      <div style={s('padding:16px;display:flex;flex-direction:column;gap:13px;')}>
-        <div><div style={s("font:600 17px 'IBM Plex Sans';color:#e8edf7;")}>Sectors</div><div style={s("font-family:'IBM Plex Mono';font-size:10.5px;color:#6b7794;margin-top:3px;")}>Allocation across the combined endowment · click to drill in</div></div>
-        <div style={s('display:grid;grid-template-columns:repeat(3,1fr);gap:13px;')}>
-          {v.sectorCards.map((c) => (
-            <div key={c.name} onClick={c.on} style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;cursor:pointer;')}>
-              <div style={s('display:flex;justify-content:space-between;align-items:flex-start;')}><span style={s("font:600 13px 'IBM Plex Sans';color:#e8edf7;max-width:165px;")}>{c.name}</span><span style={s("font-family:'IBM Plex Mono';font-size:18px;color:#e8edf7;")}>{c.shareStr}</span></div>
-              <div style={s('display:flex;justify-content:space-between;align-items:center;margin-top:6px;')}><span style={s("font-family:'IBM Plex Mono';font-size:10px;color:#6b7794;")}>{c.count} holdings</span><span style={{ ...s("font-family:'IBM Plex Mono';font-size:11px;"), color: c.retColor }}>MTD {c.ret}</span></div>
-              <div style={s('margin-top:12px;height:6px;border-radius:4px;background:#13203a;overflow:hidden;display:flex;')}><div style={{ ...s('background:#5a93f9;height:100%;'), width: c.gPct }}></div><div style={{ ...s('background:#f4a531;height:100%;'), width: c.vPct }}></div></div>
-              <div style={s("display:flex;justify-content:space-between;font-family:'IBM Plex Mono';font-size:8px;color:#5d6a85;margin-top:5px;")}><span>{v.fundAName} {c.gPctLbl}</span><span>{v.fundBName} {c.vPctLbl}</span></div>
+      <div style={s('height:calc(100vh - 48px);padding:16px;display:flex;flex-direction:column;gap:13px;')}>
+        <div style={s('flex:0 0 auto;')}><div style={s("font:600 17px 'IBM Plex Sans';color:#e8edf7;")}>Sectors</div><div style={s("font-family:'IBM Plex Mono';font-size:10.5px;color:#6b7794;margin-top:3px;")}>The five UOIG groups across the combined endowment · click a column to drill in, a card to open the holding</div></div>
+        <div style={s('flex:1;min-height:0;display:grid;grid-template-columns:repeat(5,1fr);gap:12px;')}>
+          {v.sectorCols.map((c) => (
+            <div key={c.name} style={s('display:flex;flex-direction:column;min-height:0;background:#0b0f1a;border:1px solid #1d2840;border-radius:10px;overflow:hidden;')}>
+              <div style={{ ...s('height:3px;flex:0 0 auto;'), background: c.color }}></div>
+              <div onClick={c.on} className="dc-hover" style={s('flex:0 0 auto;padding:12px 13px;border-bottom:1px solid #1d2840;cursor:pointer;')}>
+                <div style={s('display:flex;justify-content:space-between;align-items:center;')}>
+                  <div style={s('display:flex;align-items:center;gap:8px;min-width:0;')}><span style={{ ...s('width:9px;height:9px;border-radius:3px;flex:0 0 auto;'), background: c.color }}></span><span style={s("font:600 13.5px 'IBM Plex Sans';color:#e8edf7;")}>{c.name}</span></div>
+                  <span style={s("font-family:'IBM Plex Mono';font-size:15px;color:#e8edf7;")}>{c.shareStr}</span>
+                </div>
+                <div style={s("font-family:'IBM Plex Mono';font-size:8.5px;color:#5d6a85;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{c.members}</div>
+                <div style={s('display:flex;justify-content:space-between;align-items:center;margin-top:9px;')}><span style={s("font-family:'IBM Plex Mono';font-size:9.5px;color:#6b7794;")}>{c.count} holding{c.count === 1 ? '' : 's'}</span><span style={{ ...s("font-family:'IBM Plex Mono';font-size:10.5px;"), color: c.retColor }}>MTD {c.retStr}</span></div>
+                {!c.singleFund && <div style={s('margin-top:9px;height:5px;border-radius:3px;background:#13203a;overflow:hidden;display:flex;')}><div style={{ ...s('background:#5a93f9;height:100%;'), width: c.gPct }}></div><div style={{ ...s('background:#f4a531;height:100%;'), width: c.vPct }}></div></div>}
+              </div>
+              <div style={s('flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:9px;display:flex;flex-direction:column;gap:8px;')}>
+                {c.cards.length === 0
+                  ? <div style={s("font-family:'IBM Plex Mono';font-size:10px;color:#3c465e;text-align:center;padding:16px 0;")}>No holdings</div>
+                  : c.cards.map((r) => (
+                    <div key={r.t} onClick={r.open} className="dc-row" style={s('background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:9px 10px;cursor:pointer;')}>
+                      <div style={s('display:flex;justify-content:space-between;align-items:center;gap:6px;')}>
+                        <span style={s("font-family:'IBM Plex Mono';font-weight:600;font-size:12.5px;color:#e8edf7;")}>{r.t}</span>
+                        <span style={{ ...s("font:500 8.5px 'IBM Plex Mono';letter-spacing:.04em;"), color: r.fundColor }}>{r.fundTag}</span>
+                      </div>
+                      <div style={s("font:400 10.5px 'IBM Plex Sans';color:#9aa7c2;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{r.n}</div>
+                      <div style={s('display:flex;justify-content:space-between;align-items:center;margin-top:8px;')}>
+                        <span style={s("font-family:'IBM Plex Mono';font-size:9.5px;color:#6b7794;")}>Wt {r.wStr}</span>
+                        <span style={s('display:flex;gap:9px;')}><span style={{ ...s("font-family:'IBM Plex Mono';font-size:9.5px;"), color: r.dayColor }}>{r.dayStr}</span><span style={{ ...s("font-family:'IBM Plex Mono';font-size:9.5px;"), color: r.mtdColor }}>MTD {r.mtdStr}</span></span>
+                      </div>
+                    </div>
+                  ))}
+              </div>
             </div>
           ))}
         </div>
@@ -432,7 +533,20 @@ export default class App extends React.Component {
   // dispatch the active stock-detail tab through the live yfinance payload,
   // handling the loading / fetch-error / no-coverage states uniformly.
   _stkTabBody(v) {
-    const tab = v.stkTab, d = v.stkDetail
+    const tab = v.stkTab
+    if (tab === 'thesis') {
+      const t = v.thesisDetail
+      if (t === 'loading' || t === undefined) return this._stkStub('Thesis', 'loading…', 'Loading the latest thesis.')
+      if (t === 'error') return this._stkStub('Thesis', 'load failed', 'Could not load the thesis. Reopen the tab to retry.')
+      return (t.thesis && t.thesis.points && t.thesis.points.length) ? this._renderThesis(t.thesis) : this._stkStub('Thesis', 'THESIS.md', 'No thesis recorded for this holding yet. Add three points under its ticker in THESIS.md.')
+    }
+    if (tab === 'predictions') {
+      const p = v.predDetail
+      if (p === 'loading' || p === undefined) return this._stkStub('Predictions', 'fetching Kalshi…', 'Pulling live prediction markets from Kalshi — one moment.')
+      if (p === 'error') return this._stkStub('Predictions', 'fetch failed', 'Could not reach Kalshi. Reopen the tab to retry.')
+      return (p.cards && p.cards.length) ? this._renderPredictions(p.cards) : this._stkStub('Predictions', 'Kalshi', 'No prediction markets are mapped for this holding yet. Add up to five in PREDICTION_MARKETS.md.')
+    }
+    const d = v.stkDetail
     if (d === 'loading' || d === undefined) return this._stkStub(v.stkTab, 'fetching live data…', 'Pulling the latest from yfinance — one moment.')
     if (d === 'error') return this._stkStub(v.stkTab, 'fetch failed', 'Could not reach the research feed. The backend may be offline or Yahoo rate-limited the request — reopen the stock to retry.')
     if (tab === 'financials') return d.financials ? this._renderFinancials(d.financials) : this._stkStub('Financials', 'quarterly_income_stmt', 'No quarterly financials are available for this security from yfinance.')
@@ -583,6 +697,60 @@ export default class App extends React.Component {
     )
   }
 
+  _renderThesis(t) {
+    return (
+      <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:16px;')}>
+        <div style={s('display:flex;align-items:center;justify-content:space-between;margin-bottom:15px;')}>
+          <span style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.1em;text-transform:uppercase;color:#7e8aa6;")}>Investment Thesis</span>
+          <span style={s("font-family:'IBM Plex Mono';font-size:10px;color:#6b7794;")}>Most recent · {t.date}{t.analyst ? ' · ' + t.analyst : ''}</span>
+        </div>
+        <div style={s('display:flex;flex-direction:column;gap:11px;')}>
+          {t.points.map((p, i) => (
+            <div key={i} style={s('display:flex;gap:13px;align-items:flex-start;background:#0a0f1a;border:1px solid #1d2840;border-radius:8px;padding:14px 15px;')}>
+              <span style={s("width:24px;height:24px;flex:0 0 auto;border-radius:7px;background:#13203a;color:#5a93f9;display:flex;align-items:center;justify-content:center;font:600 12px 'IBM Plex Mono';")}>{i + 1}</span>
+              <span style={s("font:400 13px/1.6 'IBM Plex Sans';color:#cdd6e8;")}>{p}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  _renderPredictions(cards) {
+    const catColor = (c) => ({ 'Politics': '#c06fd6', 'Economics': '#f4a531', 'Financials': '#5a93f9', 'Science and Technology': '#21d07a', 'Commodities': '#e8674c' }[c] || '#3a4a6a')
+    const outColor = (o, i) => (o.label === 'No' ? '#ff5666' : o.label === 'Yes' ? '#21d07a' : (i === 0 ? '#21d07a' : '#5a93f9'))
+    return (
+      <div style={s('display:grid;grid-template-columns:1fr 1fr;gap:13px;')}>
+        {cards.map((c, ci) => (
+          <a key={ci} href={c.url} target="_blank" rel="noreferrer" style={s('display:block;text-decoration:none;background:#0b0f1a;border:1px solid #1d2840;border-radius:12px;padding:17px 18px;')}>
+            <div style={s('display:flex;align-items:center;gap:10px;')}>
+              <div style={{ ...s("width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;font:700 13px 'IBM Plex Sans';color:#0b0f1a;flex:0 0 auto;"), background: catColor(c.category) }}>{(c.category || '?')[0]}</div>
+              <span style={s("font:600 11px 'IBM Plex Sans';letter-spacing:.07em;text-transform:uppercase;color:#7e8aa6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{c.category}</span>
+            </div>
+            <div style={s("font:600 15px/1.3 'IBM Plex Sans';color:#e8edf7;margin-top:12px;")}>{c.title}</div>
+            <div style={s("font-family:'IBM Plex Mono';font-size:11px;color:#5d6a85;margin-top:5px;")}>{c.closeStr}</div>
+            <div style={s('display:flex;flex-direction:column;gap:13px;margin-top:15px;')}>
+              {c.outcomes.map((o, i) => (
+                <div key={i} style={s('display:flex;align-items:center;gap:12px;')}>
+                  <div style={s('flex:1;min-width:0;')}>
+                    <div style={s("font:400 14px 'IBM Plex Sans';color:#e8edf7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{o.label}</div>
+                    <div style={s('height:2px;border-radius:2px;background:#1a2338;margin-top:7px;overflow:hidden;')}><div style={{ ...s('height:100%;border-radius:2px;'), width: Math.max(4, Math.min(100, o.pct)) + '%', background: outColor(o, i) }}></div></div>
+                  </div>
+                  {o.mult ? <span style={s("font-family:'IBM Plex Mono';font-size:13px;color:#6b7794;flex:0 0 auto;")}>{o.mult}</span> : null}
+                  <span style={s("font:700 14px 'IBM Plex Sans';color:#e8edf7;border:1px solid #265c44;border-radius:999px;padding:6px 13px;flex:0 0 auto;min-width:52px;text-align:center;")}>{o.pct}%</span>
+                </div>
+              ))}
+            </div>
+            <div style={s("display:flex;justify-content:space-between;align-items:center;margin-top:16px;font-family:'IBM Plex Mono';font-size:11px;color:#5d6a85;")}>
+              <span>${c.volume.toLocaleString('en-US')} vol</span>
+              <span>{c.marketCount} market{c.marketCount === 1 ? '' : 's'}</span>
+            </div>
+          </a>
+        ))}
+      </div>
+    )
+  }
+
   _stkStub(title, source, body) {
     return (
       <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:16px;')}>
@@ -612,7 +780,7 @@ export default class App extends React.Component {
               </div>
               <div style={s("font:400 14px 'IBM Plex Sans';color:#9aa7c2;margin-top:5px;")}>{stk.n}</div>
               <div style={s('display:flex;gap:6px;margin-top:7px;')}>
-                <span onClick={() => this._openSector(stk.s, 'stock')} style={s("font:500 10px 'IBM Plex Sans';color:#9aa7c2;background:#0e1422;border:1px solid #1d2840;border-radius:5px;padding:3px 9px;cursor:pointer;")}>{stk.s}</span>
+                <span onClick={() => this._group(stk.s) && this._openSector(this._group(stk.s), 'stock')} style={s("font:500 10px 'IBM Plex Sans';color:#9aa7c2;background:#0e1422;border:1px solid #1d2840;border-radius:5px;padding:3px 9px;cursor:pointer;")}>{stk.s}</span>
               </div>
             </div>
           </div>
@@ -660,8 +828,8 @@ export default class App extends React.Component {
                 <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;margin-bottom:13px;")}>Position in {stk.fundLabel}</div>
                 <div style={s('display:flex;flex-direction:column;gap:12px;')}>
                   <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Portfolio weight</span><span style={s("font-family:'IBM Plex Mono';font-size:16px;color:#e8edf7;")}>{v.stkPos.weightStr}</span></div>
-                  <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Est. position value</span><span style={s("font-family:'IBM Plex Mono';font-size:16px;color:#e8edf7;")}>{v.stkPos.valueStr}</span></div>
-                  <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Est. shares</span><span style={s("font-family:'IBM Plex Mono';font-size:14px;color:#cdd6e8;")}>{v.stkPos.sharesStr}</span></div>
+                  <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Market value</span><span style={s("font-family:'IBM Plex Mono';font-size:16px;color:#e8edf7;")}>{v.stkPos.valueStr}</span></div>
+                  <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Shares</span><span style={s("font-family:'IBM Plex Mono';font-size:14px;color:#cdd6e8;")}>{v.stkPos.sharesStr}</span></div>
                   <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Contribution MTD</span><span style={{ ...s("font-family:'IBM Plex Mono';font-size:14px;"), color: v.stkPos.contribColor }}>{v.stkPos.contribStr}</span></div>
                 </div>
               </div>
@@ -688,10 +856,11 @@ export default class App extends React.Component {
           <div><div style={s("font:600 22px 'IBM Plex Sans';color:#e8edf7;")}>{sec.name}</div></div>
           <div style={s('text-align:right;')}><div style={s("font-family:'IBM Plex Mono';font-size:24px;color:#e8edf7;")}>{sec.shareStr}</div><div style={{ ...s("font-family:'IBM Plex Mono';font-size:11px;margin-top:2px;"), color: sec.retColor }}>MTD {sec.ret}</div></div>
         </div>
-        <div style={s('display:grid;grid-template-columns:repeat(3,1fr);gap:11px;')}>
+        <div style={{ ...s('display:grid;gap:11px;'), gridTemplateColumns: 'repeat(' + (1 + sec.wTiles.length) + ',1fr)' }}>
           <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:13px;')}><div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;")}>Holdings</div><div style={s("font-family:'IBM Plex Mono';font-size:18px;color:#e8edf7;margin-top:5px;")}>{sec.count}</div></div>
-          <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:13px;')}><div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;")}>{v.fundAName} Wt</div><div style={s("font-family:'IBM Plex Mono';font-size:18px;color:#5a93f9;margin-top:5px;")}>{sec.gWStr}</div></div>
-          <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:13px;')}><div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;")}>{v.fundBName} Wt</div><div style={s("font-family:'IBM Plex Mono';font-size:18px;color:#f4a531;margin-top:5px;")}>{sec.vWStr}</div></div>
+          {sec.wTiles.map((t, i) => (
+            <div key={i} style={s('background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:13px;')}><div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;")}>{t.label}</div><div style={{ ...s("font-family:'IBM Plex Mono';font-size:18px;margin-top:5px;"), color: t.color }}>{t.val}</div></div>
+          ))}
         </div>
         <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;overflow:hidden;')}>
           <div style={s("padding:10px 14px;border-bottom:1px solid #1d2840;font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;")}>Holdings in {sec.name}</div>
@@ -730,7 +899,7 @@ export default class App extends React.Component {
     })
     v.periods = ['1M', '3M', '6M', 'YTD', '1Y', '5Y'].map((p) => ({ k: p, bg: p === st.period ? '#13203a' : 'transparent', color: p === st.period ? '#cdd6e8' : '#6b7794', weight: p === st.period ? 600 : 500, on: () => this.setState({ period: p }) }))
 
-    v.fundTabs = [['all', 'All Funds'], [fundA, F[fundA].name], [fundB, F[fundB].name]].map(([k, label]) => ({ k, label, bg: st.fund === k ? '#1b2c4d' : 'transparent', color: st.fund === k ? '#fff' : '#9aa7c2', weight: st.fund === k ? 600 : 500, on: () => this.setState({ fund: k }) }))
+    v.fundTabs = [['all', 'All Funds'], [fundA, F[fundA].name], [fundB, F[fundB].name]].map(([k, label]) => ({ k, label, bg: st.fund === k ? '#1b2c4d' : 'transparent', color: st.fund === k ? '#fff' : '#9aa7c2', weight: st.fund === k ? 600 : 500, on: () => this._setFund(k) }))
 
     const per = st.period, fk = st.fund
     const xl = { '1M': ['4W', '3W', '2W', '1W', 'NOW'], '3M': ['APR', 'MAY', 'JUN'], '6M': ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN'], 'YTD': ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN'], '1Y': ['JUL', 'SEP', 'NOV', 'JAN', 'MAR', 'JUN'], '5Y': ["'21", "'22", "'23", "'24", "'25", "'26"] }
@@ -739,11 +908,11 @@ export default class App extends React.Component {
     const fseries = st.series[`fund:${fk}:${per}`]
     if (fk === 'all') {
       v.heroTitle = 'Total Endowment · Net Asset Value'
-      v.heroValue = '$' + this.total.toFixed(2) + 'M'
+      v.heroValue = this._kd(this.total * 1e6)
       const r = this._blend((f) => f.ret[per])
       const gain = this.total - this.total / (1 + r / 100)
       v.heroRetColor = this._col(r)
-      v.heroRetText = (r >= 0 ? '▲' : '▼') + ' ' + this._sign(r, 1) + '% ' + per + ' · ' + this._sign(gain, 2) + 'M · blended α ' + this._sign(this._blend((f) => f.alpha), 1) + '% vs policy'
+      v.heroRetText = (r >= 0 ? '▲' : '▼') + ' ' + this._sign(r, 1) + '% ' + per + ' · ' + this._kdSigned(gain * 1e6) + ' · blended α ' + this._sign(this._blend((f) => f.alpha), 1) + '% vs policy'
       const lines = []
       if (fseries && fseries.multi) fseries.multi.forEach((m, i) => lines.push({ values: m.fund.values, color: F[keys[i]].color, area: i === 0, width: 2 }))
       v.heroChartEl = this._chart('heroAll' + per, lines, 184)
@@ -758,10 +927,10 @@ export default class App extends React.Component {
       ]
     } else {
       const f = F[fk]
-      v.heroTitle = f.long; v.heroValue = '$' + f.aum.toFixed(2) + 'M'
+      v.heroTitle = f.long; v.heroValue = this._kd(f.aum * 1e6)
       const r = f.ret[per] || 0, gain = f.aum - f.aum / (1 + r / 100)
       v.heroRetColor = this._col(r)
-      v.heroRetText = (r >= 0 ? '▲' : '▼') + ' ' + this._sign(r, 1) + '% ' + per + ' · ' + this._sign(gain, 2) + 'M · α ' + this._sign(f.alpha, 1) + '% vs ' + f.benchShort
+      v.heroRetText = (r >= 0 ? '▲' : '▼') + ' ' + this._sign(r, 1) + '% ' + per + ' · ' + this._kdSigned(gain * 1e6) + ' · α ' + this._sign(f.alpha, 1) + '% vs ' + f.benchShort
       const lines = []
       if (fseries && fseries.fund) {
         lines.push({ values: fseries.fund.values, color: f.color, area: true })
@@ -786,10 +955,9 @@ export default class App extends React.Component {
     v.dashCount = dashSrc.length + ' positions'
     v.dashMoreText = 'View all ' + dashSrc.length + ' positions →'
 
-    const fsec = this._fundSectors(fk)
+    const fsec = this._fundSectors(fk).map((x) => ({ ...x, color: GROUP_COLOR[x.name] }))
     v.donutEl = this._donut(fsec)
-    const dcols = ['#5a93f9', '#6aa6ff', '#8ea8f2', '#21d07a', '#f4a531']
-    v.donutLegend = fsec.slice(0, 5).map((x, i) => ({ name: x.name, pct: x.pct.toFixed(0) + '%', color: dcols[i], on: () => this._openSector(x.name, 'dashboard') }))
+    v.donutLegend = fsec.slice(0, 5).map((x) => ({ name: x.name, pct: x.pct.toFixed(0) + '%', color: x.color, on: () => this._openSector(x.name, 'dashboard') }))
 
     const contribs = dashSrc.map((h) => ({ t: h.t, c: (h.w / 100) * h.mtd })).sort((a, b) => b.c - a.c)
     const pick = contribs.slice(0, 3).concat(contribs.slice(-1))
@@ -799,23 +967,42 @@ export default class App extends React.Component {
 
     // stocks list
     const q = (st.query || '').toLowerCase()
-    let rows = this.allH.filter((h) => !q || h.t.toLowerCase().indexOf(q) >= 0 || h.n.toLowerCase().indexOf(q) >= 0 || (h.s || '').toLowerCase().indexOf(q) >= 0)
+    const stockPool = fk === 'all' ? this.allH : this.allH.filter((h) => h.fund === fk)
+    let rows = stockPool.filter((h) => !q || h.t.toLowerCase().indexOf(q) >= 0 || h.n.toLowerCase().indexOf(q) >= 0 || (h.s || '').toLowerCase().indexOf(q) >= 0)
     const dir = st.sortDir === 'asc' ? 1 : -1
-    const keyf = { t: (h) => h.t, n: (h) => h.n, s: (h) => h.s || '', w: (h) => h.w, px: (h) => h.px, chg: (h) => h.chg, mtd: (h) => h.mtd, pe: (h) => h.pe || 0 }
+    const keyf = { t: (h) => h.t, n: (h) => h.n, s: (h) => h.s || '', w: (h) => h.w, mv: (h) => h.mv || 0, px: (h) => h.px, chg: (h) => h.chg, mtd: (h) => h.mtd, pe: (h) => h.pe || 0 }
     const kf = keyf[st.sortKey] || keyf.w
     rows = rows.slice().sort((a, b) => { const x = kf(a), y = kf(b); return typeof x === 'string' ? x.localeCompare(y) * dir : (x - y) * dir })
     v.stocksRows = rows.map((h) => this._rowVM(h, 'stocks'))
-    v.stocksCount = rows.length + ' of ' + this.allH.length + ' holdings · both funds'
+    v.stocksTitle = fk === 'all' ? 'All Holdings' : F[fk].name + ' Holdings'
+    v.stocksCount = rows.length + ' of ' + stockPool.length + ' holdings · ' + (fk === 'all' ? 'both funds' : F[fk].name)
     v.query = st.query || ''
-    const heads = [['t', 'Ticker', 'left'], ['n', 'Name', 'left'], ['s', 'Sector', 'left'], ['', 'Fund', 'right'], ['w', 'Wt', 'right'], ['px', 'Price', 'right'], ['chg', 'Day', 'right'], ['mtd', 'MTD', 'right'], ['pe', 'P/E', 'right']]
+    const heads = [['t', 'Ticker', 'left'], ['n', 'Name', 'left'], ['s', 'Sector', 'left'], ['', 'Fund', 'right'], ['w', 'Wt', 'right'], ['mv', 'Mkt Val', 'right'], ['px', 'Price', 'right'], ['chg', 'Day', 'right'], ['mtd', 'MTD', 'right'], ['pe', 'P/E', 'right']]
     v.stocksHead = heads.map(([k, label, align]) => ({ label, align, color: (k && k === st.sortKey) ? '#cdd6e8' : '#6b7794', caret: (k && k === st.sortKey) ? (st.sortDir === 'asc' ? ' ↑' : ' ↓') : '', on: k ? () => this.setState((s2) => ({ sortKey: k, sortDir: (s2.sortKey === k && s2.sortDir === 'desc') ? 'asc' : 'desc' })) : () => {} }))
 
-    // sectors list
-    const agg = this._aggSectors()
-    v.sectorCards = Object.values(agg).filter((a) => a.count > 0).sort((a, b) => b.share - a.share).map((a) => {
+    // sectors kanban — one column per UOIG group, in taxonomy order
+    const agg = this._aggSectors(fk)
+    const singleFund = fk !== 'all'
+    v.sectorCols = SECTOR_GROUPS.map((g) => {
+      const a = agg[g.name]
+      if (!a) return { name: g.name, color: g.color, members: g.members.join(' · '), shareStr: '0.0%', count: 0, cards: [], singleFund, on: () => {} }
       const gd = (a.wByFund[fundA] || 0) / 100 * F[fundA].aum, vd = (a.wByFund[fundB] || 0) / 100 * F[fundB].aum
-      const tot = gd + vd || 1, gp = gd / tot * 100, vp = vd / tot * 100
-      return { name: a.name, shareStr: a.share.toFixed(1) + '%', count: a.count, ret: this._sign(a.ret, 1) + '%', retColor: this._col(a.ret), gPct: gp.toFixed(0) + '%', vPct: vp.toFixed(0) + '%', gPctLbl: gp.toFixed(0) + '%', vPctLbl: vp.toFixed(0) + '%', on: () => this._openSector(a.name, 'sectors') }
+      const tot = gd + vd || 1
+      const cards = a.holdings.slice().sort((x, y) => y.w - x.w).map((h) => ({
+        t: h.t, n: h.n, wStr: h.w.toFixed(1) + '%',
+        dayStr: this._sign(h.chg) + '%', dayColor: this._col(h.chg),
+        mtdStr: this._sign(h.mtd, 1) + '%', mtdColor: this._col(h.mtd),
+        fundColor: (F[h.fund] || {}).color || '#5a93f9', fundTag: (F[h.fund] || {}).tag || h.fund,
+        open: () => this._openStock(h.t, 'sectors'),
+      }))
+      return {
+        name: g.name, color: g.color, members: g.members.join(' · '),
+        shareStr: a.share.toFixed(1) + '%', count: a.count,
+        retStr: this._sign(a.ret, 1) + '%', retColor: this._col(a.ret),
+        gPct: (gd / tot * 100).toFixed(0) + '%', vPct: (vd / tot * 100).toFixed(0) + '%',
+        cards, singleFund,
+        on: () => this._openSector(g.name, 'sectors'),
+      }
     })
 
     // stock detail
@@ -862,14 +1049,16 @@ export default class App extends React.Component {
       const tabKey = st.stkTab || 'overview'
       v.stkTab = tabKey
       v.stkDetail = st.stkDetail[st.ticker]
-      v.stkTabs = [['overview', 'Overview'], ['financials', 'Financials'], ['earnings', 'Earnings'], ['news', 'News'], ['research', 'Research']]
+      v.predDetail = st.predictions[st.ticker]
+      v.thesisDetail = st.theses[st.ticker]
+      v.stkTabs = [['overview', 'Overview'], ['thesis', 'Thesis'], ['financials', 'Financials'], ['earnings', 'Earnings'], ['news', 'News'], ['research', 'Research'], ['predictions', 'Predictions']]
         .map(([k, label]) => ({
           key: k, label, on: () => this.setState({ stkTab: k }),
           weight: k === tabKey ? 600 : 500, color: k === tabKey ? '#e8edf7' : '#6b7794',
           border: k === tabKey ? '2px solid #5a93f9' : '2px solid transparent',
         }))
-      const val = (h.w / 100) * f.aum, ctb = (h.w / 100) * h.mtd
-      v.stkPos = { weightStr: h.w.toFixed(1) + '%', valueStr: '$' + val.toFixed(2) + 'M', sharesStr: Math.round(val * 1e6 / h.px).toLocaleString('en-US'), contribStr: this._sign(ctb, 2) + ' pp', contribColor: this._col(ctb) }
+      const ctb = (h.w / 100) * h.mtd
+      v.stkPos = { weightStr: h.w.toFixed(1) + '%', valueStr: this._kd(h.mv), sharesStr: (h.sh != null ? Math.round(h.sh).toLocaleString('en-US') : '—'), contribStr: this._sign(ctb, 2) + ' pp', contribColor: this._col(ctb) }
       v.stkBackLabel = st.prevView === 'stocks' ? 'All Holdings' : (st.prevView === 'sector' ? (st.sector || 'Sector') : 'Dashboard')
       v.stkAskChips = [
         { text: 'What’s the bull and bear case for ' + h.t + '?', on: () => this._send('What’s the bull and bear case for ' + h.t + '?') },
@@ -881,7 +1070,10 @@ export default class App extends React.Component {
     // sector detail
     if (st.view === 'sector' && agg[st.sector]) {
       const a = agg[st.sector]
-      v.sec = { name: a.name, shareStr: a.share.toFixed(1) + '%', count: a.count, ret: this._sign(a.ret, 1) + '%', retColor: this._col(a.ret), gWStr: (a.wByFund[fundA] || 0).toFixed(1) + '%', vWStr: (a.wByFund[fundB] || 0).toFixed(1) + '%' }
+      const wTiles = []
+      if (fk === 'all' || fk === fundA) wTiles.push({ label: F[fundA].name + ' Wt', color: '#5a93f9', val: (a.wByFund[fundA] || 0).toFixed(1) + '%' })
+      if (fk === 'all' || fk === fundB) wTiles.push({ label: F[fundB].name + ' Wt', color: '#f4a531', val: (a.wByFund[fundB] || 0).toFixed(1) + '%' })
+      v.sec = { name: a.name, shareStr: a.share.toFixed(1) + '%', count: a.count, ret: this._sign(a.ret, 1) + '%', retColor: this._col(a.ret), wTiles }
       v.secRows = a.holdings.slice().sort((x, y) => y.w - x.w).map((h) => this._rowVM(h, 'sector'))
     }
 

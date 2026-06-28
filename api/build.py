@@ -84,6 +84,8 @@ def build_terminal_data(cfg: dict, conn: sqlite3.Connection) -> dict:
             "t": r.ticker, "n": r.name, "s": sector, "fund": meta.get("key", r.fund),
             "w": _clean((r.port_w or 0) * 100),
             "px": px,
+            "mv": _clean(r.market_value),   # shares × price, USD
+            "sh": _clean(r.shares),
             "chg": _clean((r.day_chg_pct or 0) * 100),
             "mtd": _clean((mtd_return(pf, r.ticker) or 0) * 100),
             "pe": _clean(fd[2]) if fd else None,

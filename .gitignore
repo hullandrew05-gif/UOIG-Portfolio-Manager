@@ -3,6 +3,7 @@
 *.key.txt
 *.pem
 andrew.key.txt
+anthropic.key.txt
 data/kalshi.api.py
 
 # Data artifacts (reproducible from the source workbook via scripts/seed_db.py)

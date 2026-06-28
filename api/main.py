@@ -17,6 +17,9 @@ from fastapi.staticfiles import StaticFiles  # noqa: E402
 from api.build import FUND_META, build_terminal_data  # noqa: E402
 from src.analytics.pnl import load_positions  # noqa: E402
 from src.ingest.research import stock_research  # noqa: E402
+from src.ingest.predictions import stock_predictions  # noqa: E402
+from src.ingest.thesis import stock_thesis  # noqa: E402
+from src.assistant import answer as llm_answer, api_key as llm_key  # noqa: E402
 from src.analytics.risk import daily_returns_matrix  # noqa: E402
 from src.analytics.series import (price_frame, period_return, synthetic_index,  # noqa: E402
                                   ticker_series)
@@ -97,12 +100,79 @@ def stock_detail(ticker: str):
         raise HTTPException(502, f"research fetch failed: {exc}")
 
 
+@app.get("/api/predictions/{ticker}")
+def predictions(ticker: str):
+    """Kalshi prediction-market cards for the stock-detail Predictions tab,
+    from the curated PREDICTION_MARKETS.md map. See src/ingest/predictions.py."""
+    try:
+        return stock_predictions(ticker.upper())
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"prediction fetch failed: {exc}")
+
+
+@app.get("/api/thesis/{ticker}")
+def thesis(ticker: str):
+    """Most recent investment thesis (three points) from THESIS.md."""
+    return stock_thesis(ticker.upper())
+
+
+def _chat_system(conn, context: str) -> str:
+    """System prompt that grounds the co-pilot in the live portfolio."""
+    data = build_terminal_data(CFG, conn)
+    lines = [
+        "You are the research co-pilot embedded in the University of Oregon Investment "
+        "Group (UOIG) endowment terminal. You help the portfolio manager reason about the "
+        "Tall Firs and Alumni Fund portfolios.",
+        "Be concise and specific; ground every claim in the data below. Use plain text "
+        "with **bold** for key figures. If something isn't in the data, say so rather than "
+        "guessing. This is for an internal student investment club — not personalized "
+        "financial advice.",
+        "You can read this project's source repository with the list_files, read_file, and "
+        "search_repo tools — use them for how the terminal works, how a number is computed, or "
+        "the analytics/data pipeline. Secrets, the database, and ignored files are not "
+        "accessible; don't claim otherwise.",
+        "For deeper per-holding analysis you have: get_stock_fundamentals (live yfinance "
+        "financials, earnings, news, analyst research), get_predictions (Kalshi market-implied "
+        "odds), and get_thesis (the team's written pitch). Pull these on demand for a ticker; "
+        "read only what the question needs.",
+        "",
+        f"PORTFOLIO SNAPSHOT (as of {data.get('asOf')}):",
+    ]
+    for f in data["funds"].values():
+        ret = (f.get("ret") or {})
+        ytd = ret.get("YTD")
+        lines.append(
+            f"- {f['name']}: AUM ${f.get('aum')}M · YTD {round(ytd * 100, 1) if ytd is not None else '—'}% "
+            f"· beta {f.get('beta')} vs {f.get('benchShort')} · α {f.get('alpha')}%"
+        )
+    lines.append("")
+    lines.append("HOLDINGS (ticker · sector · fund · weight% · MTD%):")
+    for h in sorted(data["holdings"], key=lambda x: -(x.get("w") or 0)):
+        lines.append(f"- {h['t']} · {h.get('s')} · {h['fund']} · {h.get('w')}% · {h.get('mtd')}%")
+    if context:
+        lines += ["", f"The user is currently viewing: {context}. "
+                      "Resolve 'this'/'it'/'here' to that context when ambiguous."]
+    return "\n".join(lines)
+
+
 @app.post("/api/chat")
 def chat(payload: dict):
-    # Phase D: replace with an Anthropic proxy using payload['messages'] + context.
-    return {"stub": True,
-            "reply": "Ask Claude isn't wired to the model yet — this is a stubbed "
-                     "response. The live research co-pilot arrives in Phase D."}
+    """Live Ask-Claude turn via the Anthropic API (claude-opus-4-8)."""
+    messages = payload.get("messages") or []
+    context = str(payload.get("context") or "")
+    if not llm_key():
+        return {"reply": "⚠ Ask Claude isn't configured yet. Set the **ANTHROPIC_API_KEY** "
+                         "environment variable (or drop the key in `anthropic.key.txt` at the "
+                         "repo root) and restart the backend."}
+    conn = _conn()
+    try:
+        system = _chat_system(conn, context)
+    finally:
+        conn.close()
+    try:
+        return {"reply": llm_answer(messages, system)}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"chat failed: {exc}")
 
 
 # Serve the built React terminal (single-container deploy). The /api routes above

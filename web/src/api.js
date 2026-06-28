@@ -11,9 +11,13 @@ export const getFundSeries = (fund, period) =>
   fetch(`${BASE}/api/fund-series/${fund}?period=${period}`).then(j)
 export const getStock = (ticker) =>
   fetch(`${BASE}/api/stock/${encodeURIComponent(ticker)}`).then(j)
-export const postChat = (messages) =>
+export const getPredictions = (ticker) =>
+  fetch(`${BASE}/api/predictions/${encodeURIComponent(ticker)}`).then(j)
+export const getThesis = (ticker) =>
+  fetch(`${BASE}/api/thesis/${encodeURIComponent(ticker)}`).then(j)
+export const postChat = (messages, context) =>
   fetch(`${BASE}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages, context }),
   }).then(j)
