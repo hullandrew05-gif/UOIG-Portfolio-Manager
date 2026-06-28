@@ -107,16 +107,16 @@ def auth_callback(request: Request, code: str = "", state: str = ""):
 
 @app.get("/api/auth/me")
 def auth_me(request: Request):
-    """Current user + role, or 401. The frontend gate calls this on load."""
+    """Current user + role (+ canInvite), or 401. The frontend gate calls this on load."""
     if wc.auth_disabled():
         return {"user": {"id": "dev", "email": "dev@local", "name": "Dev User",
                          "firstName": "Dev", "lastName": "User", "profilePictureUrl": None},
-                "role": "pm"}
+                "role": wc.pm_role(), "canInvite": True}
     res, new_sealed = _current(request)
     if res is None:
         raise HTTPException(401, "not authenticated")
     payload, role = auth_sessions.user_payload(res)
-    resp = JSONResponse({"user": payload, "role": role})
+    resp = JSONResponse({"user": payload, "role": role, "canInvite": wc.is_pm(role)})
     if new_sealed:
         _set_session_cookie(resp, new_sealed)
     return resp
@@ -131,11 +131,14 @@ def auth_logout():
 
 @app.post("/api/auth/invite")
 def auth_invite(request: Request, payload: dict):
-    """Invite a teammate by email. Requires a signed-in user (PM-only gating
-    arrives with the role phase). Invites can also be sent from the WorkOS dashboard."""
-    res, _ = _current(request)
-    if res is None and not wc.auth_disabled():
-        raise HTTPException(401, "not authenticated")
+    """Invite a teammate by email. PM-only (the first role-gated action); enforced
+    server-side as well as hidden in the UI. Invites can also be sent from the dashboard."""
+    if not wc.auth_disabled():
+        res, _ = _current(request)
+        if res is None:
+            raise HTTPException(401, "not authenticated")
+        if not wc.is_pm(getattr(res, "role", None)):
+            raise HTTPException(403, "only a PM can invite teammates")
     if not wc.configured():
         raise HTTPException(503, "WorkOS is not configured on the server")
     email = (payload.get("email") or "").strip()

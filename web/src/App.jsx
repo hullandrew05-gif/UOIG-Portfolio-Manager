@@ -1,5 +1,5 @@
 import React from 'react'
-import { getData, getSeries, getFundSeries, getStock, getPredictions, getThesis, postChat, searchTickers, getQuote, getMe, logout, loginUrl } from './api.js'
+import { getData, getSeries, getFundSeries, getStock, getPredictions, getThesis, postChat, searchTickers, getQuote, getMe, logout, loginUrl, sendInvite } from './api.js'
 
 // UOIG sector taxonomy: the five groups the club uses, each rolling up one or
 // more yfinance GICS sectors. Order here is the board's column order.
@@ -34,8 +34,11 @@ export default class App extends React.Component {
     this.mainRef = React.createRef()
     this.chatRef = React.createRef()
     this.state = {
-      auth: 'loading',  // 'loading' | { user, role } | null (signed out)
+      auth: 'loading',  // 'loading' | { user, role, canInvite } | null (signed out)
       authErr: null,    // ?auth_error= from the OAuth callback (e.g. 'not_invited')
+      profileOpen: false,  // profile menu popover
+      avatarImgFailed: false,  // fall back to initials if the Google photo 404s
+      inviteEmail: '', inviteState: 'idle', inviteMsg: '',  // PM invite form
       data: null, error: null,
       view: 'dashboard', fund: (typeof localStorage !== 'undefined' && localStorage.getItem('uoig.fund')) || 'all', period: 'YTD',
       ticker: null, sector: null, prevView: 'dashboard',
@@ -78,7 +81,16 @@ export default class App extends React.Component {
   }
 
   _signOut() {
-    logout().catch(() => {}).then(() => this.setState({ auth: null, data: null }))
+    logout().catch(() => {}).then(() => this.setState({ auth: null, data: null, profileOpen: false }))
+  }
+
+  _sendInvite() {
+    const email = (this.state.inviteEmail || '').trim()
+    if (!email || this.state.inviteState === 'sending') return
+    this.setState({ inviteState: 'sending', inviteMsg: '' })
+    sendInvite(email)
+      .then(() => this.setState({ inviteState: 'sent', inviteMsg: 'Invitation sent to ' + email, inviteEmail: '' }))
+      .catch((e) => this.setState({ inviteState: 'error', inviteMsg: String(e).includes('503') ? 'WorkOS isn’t configured yet.' : 'Could not send invite. Try again.' }))
   }
 
   // Initials for the nav-rail avatar, from the signed-in user (falls back to 'PM').
@@ -89,6 +101,60 @@ export default class App extends React.Component {
     if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
     if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
     return (u.email || 'PM').slice(0, 2).toUpperCase()
+  }
+
+  // Round avatar: Google photo if present (initials fallback on missing/broken image).
+  _avatar(px, fontPx) {
+    const u = (this.state.auth && this.state.auth.user) || {}
+    const base = `width:${px}px;height:${px}px;border-radius:50%;border:1px solid #24345a;flex:0 0 auto;`
+    if (u.profilePictureUrl && !this.state.avatarImgFailed) {
+      return <img src={u.profilePictureUrl} alt="" onError={() => this.setState({ avatarImgFailed: true })} style={s(base + 'object-fit:cover;')} />
+    }
+    return <div style={s(base + `background:#13203a;display:flex;align-items:center;justify-content:center;font:600 ${fontPx}px 'IBM Plex Sans';color:#9aa7c2;`)}>{this._userInitials()}</div>
+  }
+
+  _renderProfileMenu() {
+    const a = this.state.auth || {}
+    const u = a.user || {}
+    const inv = this.state.inviteState
+    return (
+      <>
+        <div onClick={() => this.setState({ profileOpen: false })} style={s('position:fixed;inset:0;z-index:90;')}></div>
+        <div style={s('position:fixed;left:12px;bottom:14px;width:264px;background:#0e1422;border:1px solid #1d2840;border-radius:12px;box-shadow:0 20px 56px rgba(0,0,0,.6);z-index:91;overflow:hidden;')}>
+          <div style={s('display:flex;align-items:center;gap:11px;padding:15px;border-bottom:1px solid #1d2840;')}>
+            {this._avatar(38, 13)}
+            <div style={s('min-width:0;')}>
+              <div style={s("font:600 13px 'IBM Plex Sans';color:#e8edf7;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{u.name || u.email || 'Signed in'}</div>
+              <div style={s("font:400 11px 'IBM Plex Mono';color:#6b7794;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{u.email || ''}</div>
+            </div>
+          </div>
+          {a.role && (
+            <div style={s('padding:11px 15px;border-bottom:1px solid #1d2840;display:flex;align-items:center;gap:8px;')}>
+              <span style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.07em;text-transform:uppercase;color:#6b7794;")}>Role</span>
+              <span style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.04em;text-transform:uppercase;color:#5a93f9;background:#13203a;border:1px solid #28406e;border-radius:5px;padding:3px 9px;")}>{a.role}</span>
+            </div>
+          )}
+          {a.canInvite && (
+            <div style={s('padding:13px 15px;border-bottom:1px solid #1d2840;')}>
+              <div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.07em;text-transform:uppercase;color:#6b7794;margin-bottom:8px;")}>Invite teammate</div>
+              <div style={s('display:flex;gap:6px;')}>
+                <input value={this.state.inviteEmail} onChange={(e) => this.setState({ inviteEmail: e.target.value, inviteState: 'idle', inviteMsg: '' })}
+                  onKeyDown={(e) => { if (e.key === 'Enter') this._sendInvite() }} placeholder="email@uoregon.edu"
+                  style={s("flex:1;min-width:0;background:#0a0f1a;border:1px solid #1d2840;border-radius:7px;padding:7px 9px;color:#e8edf7;outline:none;font:400 11px 'IBM Plex Sans';")} />
+                <span onClick={() => this._sendInvite()} style={{ ...s("display:flex;align-items:center;justify-content:center;border-radius:7px;padding:7px 11px;font:600 11px 'IBM Plex Sans';cursor:pointer;color:#fff;"), background: inv === 'sending' ? '#2a3a5c' : '#2f6df6' }}>{inv === 'sending' ? '…' : 'Send'}</span>
+              </div>
+              {this.state.inviteMsg && (
+                <div style={{ ...s("font:400 10px 'IBM Plex Sans';margin-top:7px;"), color: inv === 'sent' ? '#21d07a' : '#ff8a8a' }}>{this.state.inviteMsg}</div>
+              )}
+            </div>
+          )}
+          <div onClick={() => this._signOut()} className="dc-hover" style={s("display:flex;align-items:center;gap:9px;padding:12px 15px;cursor:pointer;font:500 12px 'IBM Plex Sans';color:#cdd6e8;")}>
+            <svg width="14" height="14" viewBox="0 0 16 16" style={{ fill: 'none', stroke: '#9aa7c2', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' }}><path d="M6 14H3.5A1.5 1.5 0 0 1 2 12.5v-9A1.5 1.5 0 0 1 3.5 2H6"></path><path d="M10.5 11 14 7.5 10.5 4"></path><path d="M14 7.5H6"></path></svg>
+            Sign out
+          </div>
+        </div>
+      </>
+    )
   }
 
   componentDidUpdate(_p, prev) {
@@ -485,8 +551,9 @@ export default class App extends React.Component {
             {v.nav.map((item) => (
               <div key={item.key} onClick={item.on} title={item.label} className="dc-hover" style={{ ...s('width:40px;height:38px;border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;'), background: item.bg, color: item.color }}>{item.icon}</div>
             ))}
-            <div onClick={() => this._signOut()} title={'Sign out' + (this.state.auth && this.state.auth.user ? ' · ' + (this.state.auth.user.name || this.state.auth.user.email) : '')} className="dc-hover" style={s("margin-top:auto;width:28px;height:28px;border-radius:50%;background:#13203a;border:1px solid #24345a;display:flex;align-items:center;justify-content:center;font:600 10.5px 'IBM Plex Sans';color:#9aa7c2;cursor:pointer;")}>{this._userInitials()}</div>
+            <div onClick={() => this.setState((st) => ({ profileOpen: !st.profileOpen }))} title={(this.state.auth && this.state.auth.user && (this.state.auth.user.name || this.state.auth.user.email)) || 'Profile'} className="dc-hover" style={s('margin-top:auto;cursor:pointer;display:flex;')}>{this._avatar(28, 10.5)}</div>
           </div>
+          {this.state.profileOpen && this._renderProfileMenu()}
 
           {/* MAIN */}
           <div ref={this.mainRef} style={s('flex:1;min-width:0;overflow-y:auto;overflow-x:hidden;')}>

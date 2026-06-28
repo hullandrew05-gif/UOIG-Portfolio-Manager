@@ -33,3 +33,9 @@ export const getMe = () => fetch(`${BASE}/api/auth/me`).then(j)
 export const logout = () =>
   fetch(`${BASE}/api/auth/logout`, { method: 'POST' }).then(j)
 export const loginUrl = () => `${BASE}/api/auth/login`
+export const sendInvite = (email, roleSlug) =>
+  fetch(`${BASE}/api/auth/invite`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, role_slug: roleSlug }),
+  }).then(j)

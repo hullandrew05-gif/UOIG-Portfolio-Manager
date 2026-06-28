@@ -38,7 +38,7 @@ The frontend talks to these JSON endpoints (Vite proxies `/api` to `:8000` in de
 | `GET /api/auth/callback` | OAuth return — sets the session cookie |
 | `GET /api/auth/me` | Current user + role, or 401 |
 | `POST /api/auth/logout` | Clear the session cookie |
-| `POST /api/auth/invite` | Invite a teammate by email (signed-in users) |
+| `POST /api/auth/invite` | Invite a teammate by email (**PM role only**) |
 
 Every `/api/*` route except `/api/health` and `/api/auth/*` requires a valid session
 (see **Authentication** below).
@@ -72,8 +72,15 @@ but not yet used to gate features (that's a later phase).
 | `WORKOS_COOKIE_PASSWORD` | `workos.cookie.txt` | 32+ chars; seals the session cookie |
 | `WORKOS_ORG_ID` | `workos.org.txt` | the invite-only org |
 | `WORKOS_REDIRECT_URI` | — | defaults to `http://localhost:5173/api/auth/callback` |
+| `WORKOS_PM_ROLE` | — | role slug allowed to invite teammates (default `pm`) |
 | `UOIG_COOKIE_SECURE` | — | set `1` in production (HTTPS) for Secure cookies |
 | `UOIG_AUTH_DISABLED` | — | **dev only** — bypass the gate; never set in production |
+
+**Profile menu.** The nav-rail avatar opens a profile menu: Google photo (initials
+fallback), name, email, role badge, and Sign out. Users whose role is the PM role
+(`WORKOS_PM_ROLE`) also get an inline **Invite teammate** form — invite is the one
+role-gated action and is enforced server-side (`POST /api/auth/invite` returns `403`
+for non-PMs), not just hidden in the UI.
 
 Until the three secrets are set, the app stays locked: the sign-in page shows and every
 data route returns `401`. For local UI work without WorkOS, set `UOIG_AUTH_DISABLED=1`.
@@ -129,7 +136,7 @@ Tests: `python tests/test_reconcile.py && python tests/test_pnl.py && python tes
 | E Packaging | done | Single-container Docker, this runbook, Streamlit retired |
 | F Global search | done | Yahoo Finance search + live quote/series; any equity opens a stock page (`src/ingest/lookup.py`) |
 | G Auth — sign-in | done | WorkOS invite-only Google OAuth; whole app gated; roles tracked (`src/auth/`) |
-| G2 Auth — profile menu | next | Profile dropdown (name/email/role, sign out), in-app invites, role-gated features |
+| G2 Auth — profile menu | done | Profile dropdown (photo/name/email/role, sign out) + PM-only invite (`src/auth/`) |
 | Later | | Live Ask-Claude (Anthropic API); migrate to Vercel + Supabase (Postgres) |
 
 ## Handoff notes (for the next PM)
