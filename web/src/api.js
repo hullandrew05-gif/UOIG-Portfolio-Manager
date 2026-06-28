@@ -25,3 +25,11 @@ export const postChat = (messages, context) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ messages, context }),
   }).then(j)
+
+// ---- auth (WorkOS) ----
+// Same-origin requests send the session cookie automatically. The login redirect
+// is a full navigation (Google consent can't be fetched), so it's not here.
+export const getMe = () => fetch(`${BASE}/api/auth/me`).then(j)
+export const logout = () =>
+  fetch(`${BASE}/api/auth/logout`, { method: 'POST' }).then(j)
+export const loginUrl = () => `${BASE}/api/auth/login`

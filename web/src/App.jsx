@@ -1,5 +1,5 @@
 import React from 'react'
-import { getData, getSeries, getFundSeries, getStock, getPredictions, getThesis, postChat, searchTickers, getQuote } from './api.js'
+import { getData, getSeries, getFundSeries, getStock, getPredictions, getThesis, postChat, searchTickers, getQuote, getMe, logout, loginUrl } from './api.js'
 
 // UOIG sector taxonomy: the five groups the club uses, each rolling up one or
 // more yfinance GICS sectors. Order here is the board's column order.
@@ -34,6 +34,8 @@ export default class App extends React.Component {
     this.mainRef = React.createRef()
     this.chatRef = React.createRef()
     this.state = {
+      auth: 'loading',  // 'loading' | { user, role } | null (signed out)
+      authErr: null,    // ?auth_error= from the OAuth callback (e.g. 'not_invited')
       data: null, error: null,
       view: 'dashboard', fund: (typeof localStorage !== 'undefined' && localStorage.getItem('uoig.fund')) || 'all', period: 'YTD',
       ticker: null, sector: null, prevView: 'dashboard',
@@ -51,6 +53,21 @@ export default class App extends React.Component {
   }
 
   componentDidMount() {
+    // Surface an OAuth callback error (e.g. ?auth_error=not_invited) on the sign-in page.
+    let authErr = null
+    try {
+      const p = new URLSearchParams(window.location.search)
+      authErr = p.get('auth_error')
+      if (authErr) { window.history.replaceState({}, '', window.location.pathname) }
+    } catch (e) { /* ignore */ }
+    // Gate on sign-in first; only load portfolio data once authenticated.
+    getMe()
+      .then((me) => { this.setState({ auth: me }); this._loadData() })
+      .catch(() => this.setState({ auth: null, authErr }))
+  }
+
+  _loadData() {
+    if (this.state.data) return
     getData()
       .then((data) => {
         const keys = Object.keys(data.funds)
@@ -58,6 +75,20 @@ export default class App extends React.Component {
         this.setState({ data, fund }, this._ensureSeries)
       })
       .catch(() => this.setState({ error: 'Could not reach the API. Is the backend running on :8000?' }))
+  }
+
+  _signOut() {
+    logout().catch(() => {}).then(() => this.setState({ auth: null, data: null }))
+  }
+
+  // Initials for the nav-rail avatar, from the signed-in user (falls back to 'PM').
+  _userInitials() {
+    const u = (this.state.auth && this.state.auth.user) || null
+    if (!u) return 'PM'
+    const parts = (u.name || `${u.firstName || ''} ${u.lastName || ''}`).trim().split(/\s+/).filter(Boolean)
+    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+    return (u.email || 'PM').slice(0, 2).toUpperCase()
   }
 
   componentDidUpdate(_p, prev) {
@@ -367,9 +398,43 @@ export default class App extends React.Component {
     }
   }
 
+  _renderSignIn() {
+    const err = this.state.authErr
+    const errText = err === 'not_invited'
+      ? 'That account isn’t on the invite list. Access is invite-only — ask your PM to send an invitation.'
+      : (err === 'bad_state' || err === 'auth_failed')
+        ? 'Sign-in didn’t complete. Please try again.'
+        : null
+    return (
+      <div style={s("height:100vh;width:100%;display:flex;align-items:center;justify-content:center;background:radial-gradient(1200px 600px at 50% -10%,#0d1426,#070a12 60%);color:#e8edf7;font-family:'IBM Plex Sans',sans-serif;")}>
+        <div style={s('width:380px;max-width:calc(100vw - 32px);display:flex;flex-direction:column;align-items:center;gap:18px;')}>
+          <img src="/uoig-logo.png" alt="UOIG" style={s('width:52px;height:52px;object-fit:contain;background:#fff;border-radius:11px;padding:5px;')} />
+          <div style={s('text-align:center;')}>
+            <div style={s("font:600 18px 'IBM Plex Sans';color:#e8edf7;")}>University of Oregon Investment Group</div>
+            <div style={s("font:500 12px 'IBM Plex Mono';color:#6b7794;letter-spacing:.14em;text-transform:uppercase;margin-top:6px;")}>Endowment Terminal</div>
+          </div>
+          <div style={s('width:100%;background:#0e1422;border:1px solid #1d2840;border-radius:12px;padding:22px;display:flex;flex-direction:column;gap:14px;box-shadow:0 22px 60px rgba(0,0,0,.5);')}>
+            {errText && (
+              <div style={s("font:400 11.5px/1.5 'IBM Plex Sans';color:#ffb4b4;background:#2a1115;border:1px solid #4a1f25;border-radius:8px;padding:10px 12px;")}>{errText}</div>
+            )}
+            <a href={loginUrl()} style={s("display:flex;align-items:center;justify-content:center;gap:10px;text-decoration:none;background:#fff;color:#1a1a1a;border-radius:9px;padding:11px 14px;font:600 13px 'IBM Plex Sans';cursor:pointer;")}>
+              <svg width="17" height="17" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.97 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>
+              Continue with Google
+            </a>
+            <div style={s("font:400 10.5px/1.5 'IBM Plex Sans';color:#5d6a85;text-align:center;")}>Access is invite-only. Sign in with the Google account that received your invitation.</div>
+          </div>
+          <div style={s("font:400 10px 'IBM Plex Mono';color:#3c465e;")}>Tall Firs · Alumni Fund</div>
+        </div>
+      </div>
+    )
+  }
+
   render() {
+    // Auth gate — the entire terminal renders only for signed-in users.
+    if (this.state.auth === 'loading') return <div style={s("height:100vh;display:flex;align-items:center;justify-content:center;background:#070a12;color:#6b7794;font-family:'IBM Plex Mono';font-size:12px;")}>Authenticating…</div>
+    if (!this.state.auth) return this._renderSignIn()
     if (this.state.error) return <div style={s('color:#ff5666;font-family:sans-serif;padding:40px;')}>{this.state.error}</div>
-    if (!this.state.data) return <div style={s("color:#6b7794;font-family:'IBM Plex Mono';padding:40px;")}>Loading terminal…</div>
+    if (!this.state.data) return <div style={s("height:100vh;display:flex;align-items:center;justify-content:center;background:#070a12;color:#6b7794;font-family:'IBM Plex Mono';font-size:12px;")}>Loading terminal…</div>
     const v = this.renderVals()
     const F = this.funds
     return (
@@ -420,7 +485,7 @@ export default class App extends React.Component {
             {v.nav.map((item) => (
               <div key={item.key} onClick={item.on} title={item.label} className="dc-hover" style={{ ...s('width:40px;height:38px;border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;'), background: item.bg, color: item.color }}>{item.icon}</div>
             ))}
-            <div title="Profile" style={s("margin-top:auto;width:28px;height:28px;border-radius:50%;background:#13203a;border:1px solid #24345a;display:flex;align-items:center;justify-content:center;font:600 10.5px 'IBM Plex Sans';color:#9aa7c2;")}>PM</div>
+            <div onClick={() => this._signOut()} title={'Sign out' + (this.state.auth && this.state.auth.user ? ' · ' + (this.state.auth.user.name || this.state.auth.user.email) : '')} className="dc-hover" style={s("margin-top:auto;width:28px;height:28px;border-radius:50%;background:#13203a;border:1px solid #24345a;display:flex;align-items:center;justify-content:center;font:600 10.5px 'IBM Plex Sans';color:#9aa7c2;cursor:pointer;")}>{this._userInitials()}</div>
           </div>
 
           {/* MAIN */}

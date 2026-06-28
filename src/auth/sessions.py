@@ -1,0 +1,97 @@
+"""Sign-in flow helpers over the WorkOS User Management SDK.
+
+The OAuth handshake: authorization_url() -> WorkOS/Google -> complete_login(code).
+Sessions are *sealed* (encrypted with the cookie password) before being stored in
+an http-only cookie; authenticate() verifies/refreshes a sealed cookie on each
+request. Role comes back from the session authentication, not the code exchange.
+"""
+from __future__ import annotations
+
+from typing import Optional, Tuple
+
+from src.auth import workos_client as wc
+
+
+def authorization_url(state: str) -> str:
+    """WorkOS authorization URL for Google OAuth, with a CSRF `state`."""
+    return wc.client().user_management.get_authorization_url(
+        provider="GoogleOAuth", redirect_uri=wc.redirect_uri(), state=state,
+    )
+
+
+def complete_login(code: str):
+    """Exchange the OAuth `code` for an AuthenticateResponse (user + tokens)."""
+    return wc.client().user_management.authenticate_with_code(code=code)
+
+
+def seal(auth) -> str:
+    """Encode an AuthenticateResponse into a sealed session string for the cookie."""
+    from workos.session import seal_session_from_auth_response
+    return seal_session_from_auth_response(
+        access_token=auth.access_token,
+        refresh_token=auth.refresh_token,
+        user=auth.user.to_dict(),
+        impersonator=auth.impersonator.to_dict() if auth.impersonator else None,
+        cookie_password=wc.cookie_password(),
+    )
+
+
+def authenticate(sealed: str) -> Tuple[Optional[object], Optional[str]]:
+    """Validate a sealed cookie. Returns (session_result, new_sealed).
+
+    `new_sealed` is non-None only when the access token was expired and a refresh
+    minted a fresh sealed session that the caller should re-set on the cookie.
+    Returns (None, None) when the cookie is invalid / cannot be refreshed.
+    """
+    try:
+        session = wc.client().user_management.load_sealed_session(
+            session_data=sealed, cookie_password=wc.cookie_password(),
+        )
+    except Exception:  # noqa: BLE001 — malformed/forged cookie
+        return None, None
+
+    try:
+        res = session.authenticate()
+    except Exception:  # noqa: BLE001
+        res = None
+    if res is not None and getattr(res, "authenticated", False):
+        return res, None
+
+    # Access token expired — try a refresh (also rotates the sealed session).
+    try:
+        refreshed = session.refresh(cookie_password=wc.cookie_password())
+    except Exception:  # noqa: BLE001
+        return None, None
+    if getattr(refreshed, "authenticated", False):
+        return refreshed, getattr(refreshed, "sealed_session", None)
+    return None, None
+
+
+def is_member(res) -> bool:
+    """Invite-only gate: the user must belong to the configured WorkOS org.
+
+    A global Google sign-in for a non-invited address authenticates but carries no
+    org membership, so it fails here. When WORKOS_ORG_ID is unset we still require
+    *some* org membership (defence in depth), but setting it is strongly advised.
+    """
+    org = getattr(res, "organization_id", None)
+    want = wc.org_id()
+    return bool(org) and (org == want if want else True)
+
+
+def user_payload(res) -> Tuple[dict, Optional[str]]:
+    """Frontend-facing {user, role} from a session/auth result."""
+    u = getattr(res, "user", None) or {}
+    if not isinstance(u, dict):
+        u = u.to_dict()
+    first, last = u.get("first_name"), u.get("last_name")
+    name = u.get("name") or " ".join(p for p in (first, last) if p) or u.get("email")
+    payload = {
+        "id": u.get("id"),
+        "email": u.get("email"),
+        "firstName": first,
+        "lastName": last,
+        "name": name,
+        "profilePictureUrl": u.get("profile_picture_url"),
+    }
+    return payload, getattr(res, "role", None)

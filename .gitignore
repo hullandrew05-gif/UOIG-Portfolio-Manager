@@ -4,6 +4,7 @@
 *.pem
 andrew.key.txt
 anthropic.key.txt
+workos.*.txt          # WorkOS api key / client id / cookie password / org id
 data/kalshi.api.py
 
 # Data artifacts (reproducible from the source workbook via scripts/seed_db.py)

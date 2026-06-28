@@ -10,11 +10,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fastapi import FastAPI, HTTPException  # noqa: E402
+import secrets as _secrets  # noqa: E402
+
+from fastapi import FastAPI, HTTPException, Request  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import JSONResponse, RedirectResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from api.build import FUND_META, build_terminal_data  # noqa: E402
+from src.auth import sessions as auth_sessions  # noqa: E402
+from src.auth import invitations as auth_invites  # noqa: E402
+from src.auth import workos_client as wc  # noqa: E402
 from src.analytics.pnl import load_positions  # noqa: E402
 from src.ingest.research import stock_research  # noqa: E402
 from src.ingest.lookup import (search_symbols, quote_overview,  # noqa: E402
@@ -31,6 +37,112 @@ from src.model.schema import get_connection  # noqa: E402
 CFG = load_config()
 app = FastAPI(title="UOIG Endowment Terminal API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+# ---------------------------------------------------------------------------
+# Authentication (WorkOS, invite-only Google OAuth). The whole app is gated:
+# every /api/* route except health and /api/auth/* requires a valid session.
+# The SPA (static mount at /) stays public; the client redirects to sign-in.
+# ---------------------------------------------------------------------------
+_AUTH_PUBLIC = ("/api/health", "/api/auth/")
+
+
+def _set_session_cookie(resp, sealed: str) -> None:
+    resp.set_cookie(wc.COOKIE_NAME, sealed, max_age=wc.SESSION_MAX_AGE,
+                    httponly=True, samesite="lax", secure=wc.is_secure(), path="/")
+
+
+def _current(request: Request):
+    """(session_result, new_sealed) for the request's cookie, or (None, None)."""
+    sealed = request.cookies.get(wc.COOKIE_NAME)
+    if not sealed or not wc.configured():
+        return None, None
+    return auth_sessions.authenticate(sealed)
+
+
+@app.middleware("http")
+async def _auth_gate(request: Request, call_next):
+    path = request.url.path
+    gated = path.startswith("/api/") and not path.startswith(_AUTH_PUBLIC)
+    if gated and not wc.auth_disabled():
+        res, new_sealed = _current(request)
+        if res is None:
+            return JSONResponse({"detail": "authentication required"}, status_code=401)
+        request.state.user = res
+        response = await call_next(request)
+        if new_sealed:
+            _set_session_cookie(response, new_sealed)
+        return response
+    return await call_next(request)
+
+
+@app.get("/api/auth/login")
+def auth_login():
+    """Begin Google OAuth: stash a CSRF state cookie, 302 to WorkOS."""
+    if not wc.configured():
+        raise HTTPException(503, "WorkOS is not configured on the server")
+    state = _secrets.token_urlsafe(24)
+    resp = RedirectResponse(auth_sessions.authorization_url(state), status_code=302)
+    resp.set_cookie(wc.STATE_COOKIE, state, max_age=600, httponly=True,
+                    samesite="lax", secure=wc.is_secure(), path="/")
+    return resp
+
+
+@app.get("/api/auth/callback")
+def auth_callback(request: Request, code: str = "", state: str = ""):
+    """OAuth return: verify state, exchange code, enforce invite-only, set cookie."""
+    if not code or not state or state != request.cookies.get(wc.STATE_COOKIE):
+        return RedirectResponse("/?auth_error=bad_state", status_code=302)
+    try:
+        auth = auth_sessions.complete_login(code)
+    except Exception:  # noqa: BLE001
+        return RedirectResponse("/?auth_error=auth_failed", status_code=302)
+    if not auth_sessions.is_member(auth):
+        return RedirectResponse("/?auth_error=not_invited", status_code=302)
+    resp = RedirectResponse("/", status_code=302)
+    resp.delete_cookie(wc.STATE_COOKIE, path="/")
+    _set_session_cookie(resp, auth_sessions.seal(auth))
+    return resp
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    """Current user + role, or 401. The frontend gate calls this on load."""
+    if wc.auth_disabled():
+        return {"user": {"id": "dev", "email": "dev@local", "name": "Dev User",
+                         "firstName": "Dev", "lastName": "User", "profilePictureUrl": None},
+                "role": "pm"}
+    res, new_sealed = _current(request)
+    if res is None:
+        raise HTTPException(401, "not authenticated")
+    payload, role = auth_sessions.user_payload(res)
+    resp = JSONResponse({"user": payload, "role": role})
+    if new_sealed:
+        _set_session_cookie(resp, new_sealed)
+    return resp
+
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(wc.COOKIE_NAME, path="/")
+    return resp
+
+
+@app.post("/api/auth/invite")
+def auth_invite(request: Request, payload: dict):
+    """Invite a teammate by email. Requires a signed-in user (PM-only gating
+    arrives with the role phase). Invites can also be sent from the WorkOS dashboard."""
+    res, _ = _current(request)
+    if res is None and not wc.auth_disabled():
+        raise HTTPException(401, "not authenticated")
+    if not wc.configured():
+        raise HTTPException(503, "WorkOS is not configured on the server")
+    email = (payload.get("email") or "").strip()
+    if not email:
+        raise HTTPException(400, "email is required")
+    inv = auth_invites.send_invite(email, payload.get("role_slug"))
+    return {"ok": True, "id": getattr(inv, "id", None), "email": email}
 
 
 def _conn():

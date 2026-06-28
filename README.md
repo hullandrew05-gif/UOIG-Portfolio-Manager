@@ -34,6 +34,14 @@ The frontend talks to these JSON endpoints (Vite proxies `/api` to `:8000` in de
 | `GET /api/predictions/{ticker}` | Kalshi prediction-market cards |
 | `GET /api/thesis/{ticker}` | Team's written thesis |
 | `POST /api/chat` | Ask-Claude turn (Anthropic API) |
+| `GET /api/auth/login` | Begin Google OAuth (302 to WorkOS) |
+| `GET /api/auth/callback` | OAuth return — sets the session cookie |
+| `GET /api/auth/me` | Current user + role, or 401 |
+| `POST /api/auth/logout` | Clear the session cookie |
+| `POST /api/auth/invite` | Invite a teammate by email (signed-in users) |
+
+Every `/api/*` route except `/api/health` and `/api/auth/*` requires a valid session
+(see **Authentication** below).
 
 **Search any equity.** The header search box queries Yahoo Finance live: type a name
 or ticker, pick a result, and the stock page populates for *any* equity — not just
@@ -41,6 +49,34 @@ portfolio holdings. Held names show a "Held" badge and the full position panel; 
 off-portfolio name shows a "Not held" card with the same live price/fundamentals.
 The search-and-lookup path (`src/ingest/lookup.py`) is yfinance only — it does **not**
 use the Anthropic API.
+
+## Authentication (WorkOS — invite-only, Google OAuth)
+The terminal is **invite-only and fully gated**: the whole app sits behind sign-in, and
+only people invited by email can get an account. Auth is handled by **WorkOS User
+Management / AuthKit**; the backend code lives in `src/auth/` (`workos_client`, `sessions`,
+`invitations`) and the routes in `api/main.py`. Roles are read from WorkOS and surfaced,
+but not yet used to gate features (that's a later phase).
+
+**One-time WorkOS dashboard setup**
+- Enable AuthKit / User Management; add a **Google OAuth** connection.
+- Create an **Organization** (its membership is the invite gate) and define roles (e.g. `pm`, `analyst`).
+- Add the redirect URI: dev `http://localhost:5173/api/auth/callback`, prod `https://<domain>/api/auth/callback`.
+- Invite teammates by email (dashboard, or `POST /api/auth/invite`).
+
+**Secrets / config** (env var first, else a git-ignored `*.txt` at repo root — same pattern as `anthropic.key.txt`):
+
+| Variable | File fallback | Notes |
+|---|---|---|
+| `WORKOS_API_KEY` | `workos.key.txt` | secret |
+| `WORKOS_CLIENT_ID` | `workos.client.txt` | |
+| `WORKOS_COOKIE_PASSWORD` | `workos.cookie.txt` | 32+ chars; seals the session cookie |
+| `WORKOS_ORG_ID` | `workos.org.txt` | the invite-only org |
+| `WORKOS_REDIRECT_URI` | — | defaults to `http://localhost:5173/api/auth/callback` |
+| `UOIG_COOKIE_SECURE` | — | set `1` in production (HTTPS) for Secure cookies |
+| `UOIG_AUTH_DISABLED` | — | **dev only** — bypass the gate; never set in production |
+
+Until the three secrets are set, the app stays locked: the sign-in page shows and every
+data route returns `401`. For local UI work without WorkOS, set `UOIG_AUTH_DISABLED=1`.
 
 ## Run it (development — hot reload)
 Two processes; the Vite dev server proxies `/api` to the backend.
@@ -64,9 +100,13 @@ Open http://localhost:8000.
 Requires Docker Desktop. Builds the frontend and backend into one image.
 ```bash
 docker build -t uoig-terminal .
-docker run -p 8000:8000 uoig-terminal
+docker run -p 8000:8000 \
+  -e WORKOS_API_KEY=... -e WORKOS_CLIENT_ID=... -e WORKOS_COOKIE_PASSWORD=... \
+  -e WORKOS_ORG_ID=... -e WORKOS_REDIRECT_URI=https://<domain>/api/auth/callback \
+  -e UOIG_COOKIE_SECURE=1 \
+  uoig-terminal
 ```
-Open http://localhost:8000.
+Open http://localhost:8000. (Pass the `WORKOS_*` env at run time — see **Authentication**.)
 
 ## Data
 ```bash
@@ -88,6 +128,8 @@ Tests: `python tests/test_reconcile.py && python tests/test_pnl.py && python tes
 | B–D Terminal UI | done | Pixel-faithful React terminal; Ask-Claude stubbed |
 | E Packaging | done | Single-container Docker, this runbook, Streamlit retired |
 | F Global search | done | Yahoo Finance search + live quote/series; any equity opens a stock page (`src/ingest/lookup.py`) |
+| G Auth — sign-in | done | WorkOS invite-only Google OAuth; whole app gated; roles tracked (`src/auth/`) |
+| G2 Auth — profile menu | next | Profile dropdown (name/email/role, sign out), in-app invites, role-gated features |
 | Later | | Live Ask-Claude (Anthropic API); migrate to Vercel + Supabase (Postgres) |
 
 ## Handoff notes (for the next PM)

@@ -9,3 +9,4 @@ yfinance>=0.2.40       # market data: prices, dividends, fundamentals
 fastapi>=0.110
 uvicorn[standard]>=0.29
 anthropic>=0.112       # Ask-Claude research co-pilot (model claude-opus-4-8)
+workos>=5.0            # User Management / AuthKit: invite-only Google OAuth sign-in
