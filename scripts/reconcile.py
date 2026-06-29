@@ -18,6 +18,7 @@ import openpyxl  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from src.config import db_path, load_config, workbook_path  # noqa: E402
+from src.model import db as _db  # noqa: E402
 from src.model.schema import get_connection  # noqa: E402
 
 MV_TOL = 0.01      # dollars
@@ -28,17 +29,18 @@ SHEET_COL = {"mv": 7, "class_w": 11, "port_w": 12, "active_w": 13}
 
 
 def _db_frame(conn, fund: str) -> pd.DataFrame:
-    rows = conn.execute(
-        """
+    cur = conn.execute(
+        _db.q(conn, """
         SELECT h.ticker, s.sec_type, h.shares, h.passive_weight,
                (SELECT close FROM prices p WHERE p.ticker = h.ticker
                 AND p.source = 'xlsx_snapshot' ORDER BY date DESC LIMIT 1) AS price
         FROM holdings h JOIN securities s ON s.ticker = h.ticker
         WHERE h.fund = ?
-        """,
+        """),
         (fund,),
-    ).fetchall()
-    df = pd.DataFrame([dict(r) for r in rows])
+    )
+    cols = [d[0] for d in cur.description]
+    df = pd.DataFrame(cur.fetchall(), columns=cols)
     df["mv"] = df["shares"] * df["price"]
 
     total = df["mv"].sum()

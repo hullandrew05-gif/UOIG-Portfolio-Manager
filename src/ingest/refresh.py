@@ -15,7 +15,7 @@ import sqlite3
 
 from src.config import db_path
 from src.ingest.providers import get_provider
-from src.model import schema
+from src.model import db, schema
 
 
 def _universe(conn: sqlite3.Connection, cfg: dict) -> tuple[list[str], set[str]]:
@@ -45,7 +45,7 @@ def refresh(cfg: dict, history_years: float | None = None,
     summary = {"tickers": len(tickers), "prices": 0, "dividends": 0, "failed": []}
     for t in tickers:
         last = conn.execute(
-            "SELECT MAX(date) FROM prices WHERE ticker = ? AND source != 'xlsx_snapshot'",
+            db.q(conn, "SELECT MAX(date) FROM prices WHERE ticker = ? AND source != 'xlsx_snapshot'"),
             (t,),
         ).fetchone()[0]
         start = default_start if (full or not last) else (
@@ -56,30 +56,32 @@ def refresh(cfg: dict, history_years: float | None = None,
             summary["failed"].append(t)
             continue
 
-        conn.executemany(
-            "INSERT OR REPLACE INTO prices (ticker, date, close, adj_close, source)"
-            " VALUES (?, ?, ?, ?, 'yfinance')",
-            [(r.ticker, r.date, float(r.close), float(r.adj_close)) for r in ph.itertuples()],
+        db.executemany(
+            conn,
+            db.upsert_sql(conn, "prices", ["ticker", "date", "close", "adj_close", "source"], ["ticker", "date"]),
+            [(r.ticker, r.date, float(r.close), float(r.adj_close), "yfinance") for r in ph.itertuples()],
         )
         summary["prices"] += len(ph)
 
         if t in bench_tickers:
-            conn.executemany(
-                "INSERT OR REPLACE INTO benchmarks (index_ticker, date, close) VALUES (?, ?, ?)",
+            db.executemany(
+                conn,
+                db.upsert_sql(conn, "benchmarks", ["index_ticker", "date", "close"], ["index_ticker", "date"]),
                 [(r.ticker, r.date, float(r.close)) for r in ph.itertuples()],
             )
 
         dv = provider.get_dividends([t], start=start)
         if not dv.empty:
-            conn.executemany(
-                "INSERT OR REPLACE INTO dividends (ticker, ex_date, amount) VALUES (?, ?, ?)",
+            db.executemany(
+                conn,
+                db.upsert_sql(conn, "dividends", ["ticker", "ex_date", "amount"], ["ticker", "ex_date"]),
                 [(r.ticker, r.ex_date, float(r.amount)) for r in dv.itertuples()],
             )
             summary["dividends"] += len(dv)
 
     conn.execute(
-        "INSERT OR REPLACE INTO import_meta (key, value) VALUES ('last_refresh', ?)",
-        (dt.datetime.now().isoformat(timespec="seconds"),),
+        db.upsert_sql(conn, "import_meta", ["key", "value"], ["key"]),
+        ("last_refresh", dt.datetime.now().isoformat(timespec="seconds")),
     )
     conn.commit()
     if own:

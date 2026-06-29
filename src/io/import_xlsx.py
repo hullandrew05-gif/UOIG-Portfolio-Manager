@@ -18,7 +18,7 @@ from pathlib import Path
 import openpyxl
 
 from src.config import db_path, workbook_path
-from src.model import schema
+from src.model import db, schema
 
 # 1-based column indices within each fund sheet
 COL = {
@@ -116,8 +116,8 @@ def import_workbook(cfg: dict, conn: sqlite3.Connection | None = None) -> dict:
             tk = p["ticker"]
             if tk not in seen:
                 cur.execute(
-                    "INSERT INTO securities (ticker, name, sector, cap_class, sec_type)"
-                    " VALUES (?, ?, ?, ?, ?)",
+                    db.q(conn, "INSERT INTO securities (ticker, name, sector, cap_class, sec_type)"
+                               " VALUES (?, ?, ?, ?, ?)"),
                     (tk, p["name"], p["sector"], p["cap_class"], p["sec_type"]),
                 )
                 seen[tk] = p["sector"]
@@ -127,25 +127,23 @@ def import_workbook(cfg: dict, conn: sqlite3.Connection | None = None) -> dict:
                 )
 
             cur.execute(
-                "INSERT INTO holdings (fund, ticker, shares, entry_price, entry_date,"
-                " passive_weight, bench_ticker, bench_entry_price)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                db.q(conn, "INSERT INTO holdings (fund, ticker, shares, entry_price, entry_date,"
+                           " passive_weight, bench_ticker, bench_entry_price)"
+                           " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
                 (p["fund"], tk, p["shares"], p["entry_price"], p["entry_date"],
                  p["passive_weight"], p["bench_ticker"], p["bench_entry_price"]),
             )
 
             if p["price"] is not None:
                 cur.execute(
-                    "INSERT OR REPLACE INTO prices (ticker, date, close, adj_close, source)"
-                    " VALUES (?, ?, ?, ?, ?)",
+                    db.upsert_sql(conn, "prices", ["ticker", "date", "close", "adj_close", "source"], ["ticker", "date"]),
                     (tk, import_date, p["price"], p["price"], "xlsx_snapshot"),
                 )
 
             # snapshot the index ETFs into the benchmarks table too
             if p["sec_type"] == "etf" and p["price"] is not None:
                 cur.execute(
-                    "INSERT OR REPLACE INTO benchmarks (index_ticker, date, close)"
-                    " VALUES (?, ?, ?)",
+                    db.upsert_sql(conn, "benchmarks", ["index_ticker", "date", "close"], ["index_ticker", "date"]),
                     (tk, import_date, p["price"]),
                 )
 
@@ -156,7 +154,7 @@ def import_workbook(cfg: dict, conn: sqlite3.Connection | None = None) -> dict:
         "source_workbook": str(workbook_path(cfg).name),
         "n_securities": str(len(seen)),
     }.items():
-        cur.execute("INSERT OR REPLACE INTO import_meta (key, value) VALUES (?, ?)", (k, v))
+        cur.execute(db.upsert_sql(conn, "import_meta", ["key", "value"], ["key"]), (k, v))
 
     conn.commit()
     if own_conn:

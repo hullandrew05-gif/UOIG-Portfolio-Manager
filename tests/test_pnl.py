@@ -11,6 +11,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.model import db as _db  # noqa: E402
+_db.database_url = lambda: None  # hermetic: always use the throwaway SQLite file
+
 import numpy as np  # noqa: E402
 
 from src.analytics.pnl import fund_summary, load_positions  # noqa: E402

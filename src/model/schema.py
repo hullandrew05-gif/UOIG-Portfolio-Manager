@@ -13,8 +13,11 @@ import_meta   Key/value provenance for the last seed/import.
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
+
+from src.model import db as _db
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS securities (
@@ -107,7 +110,11 @@ _TABLES = [
 ]
 
 
-def get_connection(db: str | Path) -> sqlite3.Connection:
+def get_connection(db: str | Path | None = None):
+    """A DB connection. Postgres when DATABASE_URL / supabase.url.txt is set
+    (the `db` path is ignored), otherwise the local SQLite file."""
+    if _db.use_postgres():
+        return _db.connect_pg()
     Path(db).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db))
     conn.row_factory = sqlite3.Row
@@ -115,13 +122,33 @@ def get_connection(db: str | Path) -> sqlite3.Connection:
     return conn
 
 
-def create_schema(conn: sqlite3.Connection) -> None:
+def create_schema(conn) -> None:
+    if _db.is_pg(conn):
+        # Postgres has no executescript and no AUTOINCREMENT — run each statement
+        # and map SQLite's autoincrement PK to an identity column.
+        ddl = SCHEMA.replace("INTEGER PRIMARY KEY AUTOINCREMENT",
+                             "BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY")
+        ddl = re.sub(r"--[^\n]*", "", ddl)  # strip -- comments (some contain ';')
+        cur = conn.cursor()
+        try:
+            for stmt in (s.strip() for s in ddl.split(";")):
+                if stmt:
+                    cur.execute(stmt)
+        finally:
+            cur.close()
+        conn.commit()
+        return
     conn.executescript(SCHEMA)
     conn.commit()
 
 
-def truncate_all(conn: sqlite3.Connection) -> None:
-    """Clear all rows for an idempotent reseed (schema preserved)."""
-    for table in _TABLES:
-        conn.execute(f"DELETE FROM {table}")
+def truncate_all(conn) -> None:
+    """Clear all rows for an idempotent reseed (schema preserved). `_TABLES` is
+    ordered children-first so FK constraints are satisfied on both backends."""
+    cur = conn.cursor()
+    try:
+        for table in _TABLES:
+            cur.execute(f"DELETE FROM {table}")
+    finally:
+        cur.close()
     conn.commit()

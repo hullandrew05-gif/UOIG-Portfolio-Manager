@@ -11,6 +11,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from src.model import db as _db  # noqa: E402
+_db.database_url = lambda: None  # hermetic: always use the throwaway SQLite file
+
 from scripts.reconcile import MV_TOL, WEIGHT_TOL, reconcile  # noqa: E402
 from src.config import load_config  # noqa: E402
 from src.io.import_xlsx import import_workbook  # noqa: E402

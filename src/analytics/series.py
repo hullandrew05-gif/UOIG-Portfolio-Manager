@@ -10,6 +10,8 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
+from src.model import db as _db
+
 PERIODS = ["1M", "3M", "6M", "YTD", "1Y", "5Y"]
 _DAYS = {"1M": 30, "3M": 91, "6M": 182, "1Y": 365, "5Y": 1826}
 
@@ -68,13 +70,13 @@ def mtd_return(pf: pd.DataFrame, ticker: str):
 def div_yield_ttm(conn: sqlite3.Connection, ticker: str, price: float):
     if not price:
         return None
-    last = conn.execute("SELECT MAX(date) FROM prices WHERE ticker=? AND source='yfinance'",
+    last = conn.execute(_db.q(conn, "SELECT MAX(date) FROM prices WHERE ticker=? AND source='yfinance'"),
                         (ticker,)).fetchone()[0]
     if not last:
         return None
     cutoff = (dt.date.fromisoformat(last) - dt.timedelta(days=365)).isoformat()
-    total = conn.execute("SELECT COALESCE(SUM(amount),0) FROM dividends "
-                         "WHERE ticker=? AND ex_date>=?", (ticker, cutoff)).fetchone()[0]
+    total = conn.execute(_db.q(conn, "SELECT COALESCE(SUM(amount),0) FROM dividends "
+                                     "WHERE ticker=? AND ex_date>=?"), (ticker, cutoff)).fetchone()[0]
     return float(total) / price * 100 if total else 0.0
 
 

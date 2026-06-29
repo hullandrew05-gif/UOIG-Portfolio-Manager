@@ -14,7 +14,7 @@ import yfinance as yf
 
 from src.config import db_path
 from src.ingest.providers import to_yf
-from src.model import schema
+from src.model import db, schema
 
 
 def _f(v) -> float | None:
@@ -49,9 +49,9 @@ def pull_fundamentals(cfg: dict, conn: sqlite3.Connection | None = None,
             summary["failed"].append(t)
             continue
         conn.execute(
-            "INSERT OR REPLACE INTO fundamentals"
-            " (ticker, gics_sector, pe, pb, market_cap, week52_low, week52_high,"
-            "  description, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            db.upsert_sql(conn, "fundamentals",
+                          ["ticker", "gics_sector", "pe", "pb", "market_cap",
+                           "week52_low", "week52_high", "description", "updated"], ["ticker"]),
             (t, info.get("sector"),
              _f(info.get("forwardPE") or info.get("trailingPE")),
              _f(info.get("priceToBook")), _f(info.get("marketCap")),

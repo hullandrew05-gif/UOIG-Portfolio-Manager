@@ -36,6 +36,10 @@ The frontend talks to these JSON endpoints (Vite proxies `/api` to `:8000` in de
 | `POST /api/chat` | Ask-Claude turn (Anthropic API) |
 | `GET /api/auth/login` | Begin Google OAuth (302 to WorkOS) |
 | `GET /api/auth/callback` | OAuth return — sets the session cookie |
+| `POST /api/auth/password-login` | Email + password sign-in (sets session cookie) |
+| `POST /api/auth/verify-email` | Complete an email-verification challenge |
+| `POST /api/auth/password-reset` | Request a reset / set-password email |
+| `POST /api/auth/password-reset/confirm` | Set a new password from a reset token |
 | `GET /api/auth/me` | Current user + role, or 401 |
 | `POST /api/auth/logout` | Clear the session cookie |
 | `POST /api/auth/invite` | Invite a teammate by email (**PM role only**) |
@@ -50,18 +54,21 @@ off-portfolio name shows a "Not held" card with the same live price/fundamentals
 The search-and-lookup path (`src/ingest/lookup.py`) is yfinance only — it does **not**
 use the Anthropic API.
 
-## Authentication (WorkOS — invite-only, Google OAuth)
+## Authentication (WorkOS — invite-only; Google + email/password)
 The terminal is **invite-only and fully gated**: the whole app sits behind sign-in, and
-only people invited by email can get an account. Auth is handled by **WorkOS User
+only people invited by email can get an account. Sign in with **Google** or
+**email + password** (with a forgot/set-password reset flow — that reset email is also how
+an invited user sets their first password). Auth is handled by **WorkOS User
 Management / AuthKit**; the backend code lives in `src/auth/` (`workos_client`, `sessions`,
-`invitations`) and the routes in `api/main.py`. Roles are read from WorkOS and surfaced,
-but not yet used to gate features (that's a later phase).
+`invitations`) and the routes in `api/main.py`. Roles are read from WorkOS and surfaced;
+only the invite action is role-gated (PM) so far.
 
 **One-time WorkOS dashboard setup**
-- Enable AuthKit / User Management; add a **Google OAuth** connection.
+- Enable AuthKit / User Management; add a **Google OAuth** connection **and** enable the **Email + Password** auth method.
 - Create an **Organization** (its membership is the invite gate) and define roles (e.g. `pm`, `analyst`).
-- Add the redirect URI: dev `http://localhost:5173/api/auth/callback`, prod `https://<domain>/api/auth/callback`.
-- Invite teammates by email (dashboard, or `POST /api/auth/invite`).
+- Add the OAuth redirect URI: dev `http://localhost:5173/api/auth/callback`, prod `https://<domain>/api/auth/callback`.
+- Set the **password-reset redirect URL** to the app with a `reset` marker: dev `http://localhost:5173/?reset=1`, prod `https://<domain>/?reset=1` (WorkOS appends the `token`; the SPA shows the set-password form).
+- Invite teammates by email (dashboard, or `POST /api/auth/invite` — PM only).
 
 **Secrets / config** (env var first, else a git-ignored `*.txt` at repo root — same pattern as `anthropic.key.txt`):
 
@@ -111,6 +118,7 @@ docker run -p 8000:8000 \
   -e WORKOS_API_KEY=... -e WORKOS_CLIENT_ID=... -e WORKOS_COOKIE_PASSWORD=... \
   -e WORKOS_ORG_ID=... -e WORKOS_REDIRECT_URI=https://<domain>/api/auth/callback \
   -e UOIG_COOKIE_SECURE=1 \
+  -e DATABASE_URL=postgresql://...        # Supabase pooler (omit to use bundled SQLite) \
   uoig-terminal
 ```
 Open http://localhost:8000. (Pass the `WORKOS_*` env at run time — see **Authentication**.)
@@ -123,6 +131,19 @@ python -m scripts.fundamentals   # pull P/E, P/B, sector, 52-wk, descriptions
 python -m scripts.reconcile      # verify DB == source workbook
 ```
 Tests: `python tests/test_reconcile.py && python tests/test_pnl.py && python tests/test_returns.py && python tests/test_risk.py`
+
+### Database backend (SQLite or Postgres/Supabase)
+The store runs on **SQLite by default** (`data/portfolio.db`) and switches to
+**Postgres** automatically when a connection string is set — env `DATABASE_URL`, or a
+git-ignored `supabase.url.txt` at the repo root (raw password is fine; we parse the URL).
+Use a Supabase **pooler** URI (host `…pooler.supabase.com`), not the direct connection.
+`src/model/db.py` papers over the dialect differences; the same query code runs on both.
+```bash
+# one-time copy of the local SQLite store into Supabase/Postgres
+python -m scripts.migrate_to_postgres
+```
+All `data/` scripts (`seed_db`/`refresh`/`fundamentals`) target whichever backend is
+configured, so after migrating you can run nightly refreshes straight against Supabase.
 
 ## Roadmap
 | Phase | Status | What |
@@ -137,7 +158,9 @@ Tests: `python tests/test_reconcile.py && python tests/test_pnl.py && python tes
 | F Global search | done | Yahoo Finance search + live quote/series; any equity opens a stock page (`src/ingest/lookup.py`) |
 | G Auth — sign-in | done | WorkOS invite-only Google OAuth; whole app gated; roles tracked (`src/auth/`) |
 | G2 Auth — profile menu | done | Profile dropdown (photo/name/email/role, sign out) + PM-only invite (`src/auth/`) |
-| Later | | Live Ask-Claude (Anthropic API); migrate to Vercel + Supabase (Postgres) |
+| G3 Auth — email/password | done | Email + password sign-in + forgot/set-password reset, alongside Google |
+| H Database — Supabase | done | Dual-backend SQLite/Postgres; one-command migrate (`src/model/db.py`, `scripts/migrate_to_postgres.py`) |
+| Later | | Live Ask-Claude (Anthropic API); deploy backend host + frontend to Vercel |
 
 ## Handoff notes (for the next PM)
 - Config lives in `config.yaml` (funds, benchmarks, beta window).
