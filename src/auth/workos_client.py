@@ -56,7 +56,22 @@ def client_id() -> str | None:
 
 
 def cookie_password() -> str | None:
-    return _secret("WORKOS_COOKIE_PASSWORD", "workos.cookie.txt")
+    """The session-seal key. WorkOS's seal uses this directly as a Fernet key,
+    which must be exactly 32 url-safe-base64 bytes (44 chars). To accept any
+    secret the user sets (e.g. a 43-char token_urlsafe(32)), normalize it to a
+    valid Fernet key deterministically — same input always yields the same key,
+    so sealed sessions stay valid across restarts."""
+    raw = _secret("WORKOS_COOKIE_PASSWORD", "workos.cookie.txt")
+    if not raw:
+        return None
+    import base64
+    import hashlib
+    try:
+        if len(base64.urlsafe_b64decode(raw)) == 32:
+            return raw  # already a valid Fernet key
+    except Exception:  # noqa: BLE001 — not valid base64 / wrong length
+        pass
+    return base64.urlsafe_b64encode(hashlib.sha256(raw.encode()).digest()).decode()
 
 
 def org_id() -> str | None:
