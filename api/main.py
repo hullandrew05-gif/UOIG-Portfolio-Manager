@@ -48,13 +48,11 @@ CFG = load_config()
 app = FastAPI(title="UOIG Endowment Terminal API")
 # Same-origin dev: wildcard CORS, no credentials. Split deploy (Vercel frontend +
 # separate backend): set CORS_ORIGINS to the exact frontend origin(s) so cookies
-# can ride cross-site (credentials require a non-wildcard origin).
+# can ride cross-site (credentials require a non-wildcard origin). The middleware
+# itself is added at the bottom of this module so it ends up OUTERMOST — that way
+# CORS headers are attached to every response, including the auth gate's 401s and
+# any error, and OPTIONS preflights are answered before the gate runs.
 _CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
-if _CORS_ORIGINS:
-    app.add_middleware(CORSMiddleware, allow_origins=_CORS_ORIGINS, allow_credentials=True,
-                       allow_methods=["*"], allow_headers=["*"])
-else:
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +261,24 @@ def _fund_name(key: str):
 
 @app.get("/api/health")
 def health():
-    return {"ok": True}
+    """Liveness + a no-secrets config diagnostic (handy for verifying a deploy).
+    Reports only booleans + non-secret config — never the secret values."""
+    from src.model import db as _dbmod
+    return {
+        "ok": True,
+        "db": "postgres" if _dbmod.use_postgres() else "sqlite",
+        "workos": {
+            "configured": wc.configured(),
+            "apiKey": bool(wc.api_key()),
+            "clientId": bool(wc.client_id()),
+            "cookiePassword": bool(wc.cookie_password()),
+            "orgId": bool(wc.org_id()),
+            "redirectUri": wc.redirect_uri(),
+        },
+        "cors": _CORS_ORIGINS or "*",
+        "frontendUrl": wc.frontend_url() or None,
+        "cookieSameSite": wc.cookie_samesite(),
+    }
 
 
 @app.get("/api/data")
@@ -416,6 +431,16 @@ def chat(payload: dict):
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"chat failed: {exc}")
 
+
+# CORS is added LAST so it's the outermost middleware: it answers OPTIONS
+# preflights before the auth gate and attaches CORS headers to every response
+# (including the gate's 401s and any error), so cross-origin failures surface as
+# real statuses instead of opaque "no Access-Control-Allow-Origin" errors.
+if _CORS_ORIGINS:
+    app.add_middleware(CORSMiddleware, allow_origins=_CORS_ORIGINS, allow_credentials=True,
+                       allow_methods=["*"], allow_headers=["*"])
+else:
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # Serve the built React terminal (single-container deploy). The /api routes above
 # are matched first; this catch-all mount serves the SPA for everything else.

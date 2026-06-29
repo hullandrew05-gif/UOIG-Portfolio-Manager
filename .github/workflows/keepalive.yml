@@ -1,0 +1,19 @@
+name: keep-alive
+
+# Render's free tier spins the backend down after ~15 min idle; the first request
+# after that cold-starts (~50s) and can fail (e.g. CORS preflight gets a 502 with
+# no CORS headers). Pinging /api/health every ~10 min keeps it warm.
+# Note: GitHub-scheduled runs can be delayed/skipped under load and pause after
+# 60 days of repo inactivity — an external monitor (UptimeRobot) is more reliable.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend health
+        run: curl -fsS --max-time 90 https://uoig-portfolio-manager.onrender.com/api/health || true
