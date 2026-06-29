@@ -19,7 +19,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY api/ ./api/
 COPY src/ ./src/
 COPY config.yaml ./
-COPY data/portfolio.db ./data/portfolio.db
 COPY --from=web /web/dist ./web/dist
+# No SQLite DB baked in — production reads Postgres via DATABASE_URL (Supabase).
+# Bind the platform-provided $PORT (Render/Fly inject it); default 8000 locally.
 EXPOSE 8000
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
