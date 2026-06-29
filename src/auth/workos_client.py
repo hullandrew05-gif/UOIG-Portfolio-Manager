@@ -18,6 +18,9 @@ _ENVNAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # Session cookie (sealed WorkOS session) and the short-lived OAuth CSRF-state cookie.
 COOKIE_NAME = "uoig_session"
 STATE_COOKIE = "uoig_oauth_state"
+# Carries an invitation token across the Google-OAuth round trip, so the callback
+# can accept the invite when an invitee signs in with Google. Short-lived.
+INVITE_COOKIE = "uoig_invite"
 SESSION_MAX_AGE = 60 * 60 * 24 * 14  # 14 days
 
 

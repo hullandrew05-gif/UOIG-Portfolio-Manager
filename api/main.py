@@ -98,30 +98,39 @@ async def _auth_gate(request: Request, call_next):
 
 
 @app.get("/api/auth/login")
-def auth_login():
-    """Begin Google OAuth: stash a CSRF state cookie, 302 to WorkOS."""
+def auth_login(invitation_token: str = ""):
+    """Begin Google OAuth: stash a CSRF state cookie, 302 to WorkOS. When an
+    invitee starts from the accept page, `invitation_token` is stashed in a
+    short-lived cookie so the callback can accept the invite after Google."""
     if not wc.configured():
         raise HTTPException(503, "WorkOS is not configured on the server")
     state = _secrets.token_urlsafe(24)
     resp = RedirectResponse(auth_sessions.authorization_url(state), status_code=302)
     resp.set_cookie(wc.STATE_COOKIE, state, max_age=600, httponly=True,
                     samesite=wc.cookie_samesite(), secure=wc.is_secure(), path="/")
+    if invitation_token:
+        resp.set_cookie(wc.INVITE_COOKIE, invitation_token, max_age=600, httponly=True,
+                        samesite=wc.cookie_samesite(), secure=wc.is_secure(), path="/")
     return resp
 
 
 @app.get("/api/auth/callback")
 def auth_callback(request: Request, code: str = "", state: str = ""):
-    """OAuth return: verify state, exchange code, enforce invite-only, set cookie."""
+    """OAuth return: verify state, exchange code, enforce invite-only, set cookie.
+    If an invite token rode along (invitee signing in with Google), pass it to the
+    exchange so WorkOS accepts the invitation and joins them to the org."""
     if not code or not state or state != request.cookies.get(wc.STATE_COOKIE):
         return _app_redirect("/?auth_error=bad_state")
+    invite = request.cookies.get(wc.INVITE_COOKIE) or None
     try:
-        auth = auth_sessions.complete_login(code)
+        auth = auth_sessions.complete_login(code, invitation_token=invite)
     except Exception:  # noqa: BLE001
         return _app_redirect("/?auth_error=auth_failed")
     if not auth_sessions.is_member(auth):
         return _app_redirect("/?auth_error=not_invited")
     resp = _app_redirect("/")
     resp.delete_cookie(wc.STATE_COOKIE, path="/")
+    resp.delete_cookie(wc.INVITE_COOKIE, path="/")
     _set_session_cookie(resp, auth_sessions.seal(auth))
     return resp
 
@@ -143,10 +152,11 @@ def auth_password_login(payload: dict):
         raise HTTPException(503, "WorkOS is not configured on the server")
     email = (payload.get("email") or "").strip()
     password = payload.get("password") or ""
+    invite = (payload.get("invitationToken") or "").strip() or None
     if not email or not password:
         raise HTTPException(400, "email and password are required")
     try:
-        auth = auth_sessions.password_login(email, password)
+        auth = auth_sessions.password_login(email, password, invitation_token=invite)
     except EmailVerificationRequiredError as exc:
         return JSONResponse({"needsVerification": True,
                              "pendingToken": getattr(exc, "pending_authentication_token", None)})
@@ -203,6 +213,66 @@ def auth_password_reset_confirm(payload: dict):
     except WorkOSError:
         raise HTTPException(400, "invalid or expired reset link")
     return {"ok": True}
+
+
+@app.get("/api/auth/invitation")
+def auth_invitation(token: str = ""):
+    """Public lookup for the branded accept page: resolve an invitation token to
+    the invitee's email + state so the page can greet them and validate the link.
+    Never echoes the token back."""
+    if not wc.configured():
+        raise HTTPException(503, "WorkOS is not configured on the server")
+    if not token:
+        raise HTTPException(400, "token is required")
+    try:
+        inv = auth_invites.find_by_token(token)
+    except Exception:  # noqa: BLE001 — unknown/expired token, or any WorkOS error
+        raise HTTPException(404, "invitation not found")
+    state = getattr(inv.state, "value", inv.state)
+    return {
+        "email": inv.email,
+        "state": state,
+        "pending": state == "pending",
+        "organizationId": inv.organization_id,
+        "roleSlug": inv.role_slug,
+    }
+
+
+@app.post("/api/auth/accept-password")
+def auth_accept_password(payload: dict):
+    """Invitee 'set a password' path: validate the invite token, create the user
+    with the chosen password, then authenticate WITH the token so WorkOS accepts
+    the invitation (joins the org) and we set the session cookie."""
+    if not wc.configured():
+        raise HTTPException(503, "WorkOS is not configured on the server")
+    token = (payload.get("invitationToken") or "").strip()
+    password = payload.get("password") or ""
+    if not token or not password:
+        raise HTTPException(400, "invitation token and password are required")
+    try:
+        inv = auth_invites.find_by_token(token)
+    except Exception:  # noqa: BLE001 — unknown/expired token, or any WorkOS error
+        raise HTTPException(404, "invitation not found")
+    if getattr(inv.state, "value", inv.state) != "pending":
+        raise HTTPException(409, "this invitation is no longer valid")
+    try:
+        auth_sessions.create_user_with_password(
+            inv.email, password,
+            (payload.get("firstName") or "").strip(),
+            (payload.get("lastName") or "").strip(),
+        )
+    except (BadRequestError, UnprocessableEntityError):
+        # Most likely the account already exists — fall through to authenticate,
+        # which succeeds if they typed their existing password (and accepts the
+        # invite), or 401s below if not.
+        pass
+    try:
+        auth = auth_sessions.password_login(inv.email, password, invitation_token=token)
+    except EmailPasswordAuthDisabledError:
+        raise HTTPException(503, "email/password sign-in isn't enabled")
+    except WorkOSError:
+        raise HTTPException(401, "could not complete sign-in — try 'Continue with Google' instead")
+    return _finish_auth(auth)
 
 
 @app.get("/api/auth/me")

@@ -30,8 +30,13 @@ export const postChat = (messages, context) => post('/api/chat', { messages, con
 // The login redirect is a full navigation (Google consent can't be fetched).
 export const getMe = () => get('/api/auth/me')
 export const logout = () => post('/api/auth/logout')
-export const loginUrl = () => `${BASE}/api/auth/login`
+// Pass an invitation token to carry it through Google OAuth (invitee accept flow).
+export const loginUrl = (invitationToken) =>
+  `${BASE}/api/auth/login${invitationToken ? `?invitation_token=${encodeURIComponent(invitationToken)}` : ''}`
 export const sendInvite = (email, roleSlug) => post('/api/auth/invite', { email, role_slug: roleSlug })
+// Invitee accept flow: look up an invitation by token; set a password to accept.
+export const getInvitation = (token) => get(`/api/auth/invitation?token=${encodeURIComponent(token)}`)
+export const acceptPassword = (body) => post('/api/auth/accept-password', body)
 export const passwordLogin = (email, password) => post('/api/auth/password-login', { email, password })
 export const requestPasswordReset = (email) => post('/api/auth/password-reset', { email })
 export const confirmPasswordReset = (token, password) => post('/api/auth/password-reset/confirm', { token, password })

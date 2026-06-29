@@ -20,3 +20,11 @@ def send_invite(email: str, role_slug: Optional[str] = None,
         role_slug=role_slug,
         inviter_user_id=inviter_user_id,
     )
+
+
+def find_by_token(token: str):
+    """Resolve a raw invitation token (from the email's accept link) to its
+    Invitation: email, organization_id, role_slug, state and expires_at. Used to
+    greet the invitee by email on the branded accept page and to validate the
+    token before letting them set a password. Raises if the token is unknown."""
+    return wc.client().user_management.find_invitation_by_token(token)

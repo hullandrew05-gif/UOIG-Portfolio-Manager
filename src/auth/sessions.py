@@ -19,16 +19,37 @@ def authorization_url(state: str) -> str:
     )
 
 
-def complete_login(code: str):
-    """Exchange the OAuth `code` for an AuthenticateResponse (user + tokens)."""
-    return wc.client().user_management.authenticate_with_code(code=code)
+def complete_login(code: str, invitation_token: Optional[str] = None):
+    """Exchange the OAuth `code` for an AuthenticateResponse (user + tokens).
+
+    When `invitation_token` is set (the invitee arrived via an invitation email
+    and signed in with Google), WorkOS accepts the invitation as part of the
+    exchange — adding the user to the org so the invite-only gate passes."""
+    return wc.client().user_management.authenticate_with_code(
+        code=code, invitation_token=invitation_token or None,
+    )
+
+
+def create_user_with_password(email: str, password: str,
+                              first_name: Optional[str] = None,
+                              last_name: Optional[str] = None):
+    """Create a WorkOS user with an initial password (invitee 'set a password'
+    path). Raises if a user with that email already exists."""
+    return wc.client().user_management.create_user(
+        email=email, password=password,
+        first_name=first_name or None, last_name=last_name or None,
+    )
 
 
 # ---- email + password (and the reset / verification flows) ----
-def password_login(email: str, password: str):
-    """Authenticate with email + password -> AuthenticateResponse.
+def password_login(email: str, password: str, invitation_token: Optional[str] = None):
+    """Authenticate with email + password -> AuthenticateResponse. Pass
+    `invitation_token` to also accept a pending invitation (join the org) on the
+    invitee's first password sign-in.
     Raises workos._errors types (AuthenticationError, EmailVerificationRequiredError, …)."""
-    return wc.client().user_management.authenticate_with_password(email=email, password=password)
+    return wc.client().user_management.authenticate_with_password(
+        email=email, password=password, invitation_token=invitation_token or None,
+    )
 
 
 def request_password_reset(email: str):

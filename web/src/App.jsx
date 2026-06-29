@@ -1,5 +1,5 @@
 import React from 'react'
-import { getData, getSeries, getFundSeries, getStock, getPredictions, getThesis, postChat, searchTickers, getQuote, getMe, logout, loginUrl, sendInvite, passwordLogin, requestPasswordReset, confirmPasswordReset, verifyEmail } from './api.js'
+import { getData, getSeries, getFundSeries, getStock, getPredictions, getThesis, postChat, searchTickers, getQuote, getMe, logout, loginUrl, sendInvite, passwordLogin, requestPasswordReset, confirmPasswordReset, verifyEmail, getInvitation, acceptPassword } from './api.js'
 
 // UOIG sector taxonomy: the five groups the club uses, each rolling up one or
 // more yfinance GICS sectors. Order here is the board's column order.
@@ -28,6 +28,114 @@ function s(css) {
   return o
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+function fmtChartDate(d) {
+  if (!d) return ''
+  const p = String(d).split('-')
+  if (p.length < 3) return String(d)
+  return MONTHS[(+p[1]) - 1] + ' ' + (+p[2]) + ', ' + p[0]
+}
+
+// Interactive single-line price chart with a price axis and a hover readout.
+// Used on the stock page (the fund/hero charts still use App._chart).
+function PriceChart({ dates, values, color, height }) {
+  const [hover, setHover] = React.useState(null)
+  const wrapRef = React.useRef(null)
+  const n = values ? values.length : 0
+  if (!n) return React.createElement('div', { style: { height: height + 'px' } })
+
+  const W = 900, padT = 6, padB = 6, plotH = height - padT - padB
+  const min = Math.min.apply(null, values)
+  const max = Math.max.apply(null, values)
+  const span = (max - min) || 1
+  const Y = (v) => +(height - padB - ((v - min) / span) * plotH).toFixed(2)
+  const X = (i) => +((i / ((n - 1) || 1)) * W).toFixed(2)
+  const xPct = (i) => (i / ((n - 1) || 1)) * 100
+
+  const line = values.map((v, i) => (i ? 'L' : 'M') + X(i) + ',' + Y(v)).join(' ')
+  const area = line + ' L' + W + ',' + height + ' L0,' + height + ' Z'
+  const gid = 'pc-grad-' + (color || '').replace('#', '')
+
+  const TN = 4
+  const ticks = []
+  for (let k = 0; k <= TN; k++) {
+    const val = min + (span * k) / TN
+    ticks.push({ val, y: Y(val) })
+  }
+
+  const onMove = (e) => {
+    const r = wrapRef.current && wrapRef.current.getBoundingClientRect()
+    if (!r || !r.width) return
+    let idx = Math.round(((e.clientX - r.left) / r.width) * (n - 1))
+    idx = Math.max(0, Math.min(n - 1, idx))
+    setHover(idx)
+  }
+
+  const fmtPrice = (v) => '$' + v.toFixed(2)
+  const gridY = (f) => +(padT + plotH * f).toFixed(1)
+
+  const svg = React.createElement('svg', {
+    viewBox: '0 0 ' + W + ' ' + height, preserveAspectRatio: 'none',
+    style: { width: '100%', height: '100%', display: 'block' },
+  }, [
+    React.createElement('defs', { key: 'defs' }, [
+      React.createElement('linearGradient', { key: 'g', id: gid, x1: 0, y1: 0, x2: 0, y2: 1 }, [
+        React.createElement('stop', { key: 'a', offset: '0', style: { stopColor: color, stopOpacity: 0.26 } }),
+        React.createElement('stop', { key: 'b', offset: '1', style: { stopColor: color, stopOpacity: 0 } }),
+      ]),
+    ]),
+  ].concat(ticks.map((t, i) => React.createElement('line', {
+    key: 'grid' + i, x1: 0, y1: t.y, x2: W, y2: t.y, style: { stroke: '#16203a', strokeWidth: 1 },
+  }))).concat([
+    React.createElement('path', { key: 'area', d: area, style: { fill: 'url(#' + gid + ')', stroke: 'none' } }),
+    React.createElement('path', { key: 'line', d: line, style: { fill: 'none', stroke: color, strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' } }),
+  ]))
+
+  // axis gutter: price labels aligned to the grid lines
+  const axis = React.createElement('div', {
+    key: 'axis',
+    style: { position: 'relative', width: '52px', flex: '0 0 auto', height: height + 'px' },
+  }, ticks.map((t, i) => React.createElement('span', {
+    key: 'ax' + i,
+    style: {
+      position: 'absolute', right: 0, top: t.y + 'px', transform: 'translateY(-50%)',
+      fontFamily: "'IBM Plex Mono'", fontSize: '9.5px', color: '#6b7794', whiteSpace: 'nowrap',
+    },
+  }, fmtPrice(t.val))))
+
+  // hover overlay: crosshair, marker dot, and a price/date tooltip
+  let overlay = []
+  if (hover != null && hover < n) {
+    const left = xPct(hover)
+    const topY = Y(values[hover])
+    const clamped = Math.max(11, Math.min(89, left))
+    overlay = [
+      React.createElement('div', {
+        key: 'cross',
+        style: { position: 'absolute', top: 0, bottom: 0, left: left + '%', width: '1px', background: 'rgba(154,167,194,.35)', pointerEvents: 'none' },
+      }),
+      React.createElement('div', {
+        key: 'dot',
+        style: { position: 'absolute', left: left + '%', top: topY + 'px', width: '8px', height: '8px', borderRadius: '50%', background: color, border: '2px solid #0e1422', transform: 'translate(-50%,-50%)', pointerEvents: 'none' },
+      }),
+      React.createElement('div', {
+        key: 'tip',
+        style: { position: 'absolute', left: clamped + '%', top: Math.max(0, topY - 50) + 'px', transform: 'translateX(-50%)', background: '#0a0f1a', border: '1px solid #24345a', borderRadius: '6px', padding: '5px 9px', pointerEvents: 'none', whiteSpace: 'nowrap', boxShadow: '0 4px 14px rgba(0,0,0,.45)' },
+      }, [
+        React.createElement('div', { key: 'p', style: { fontFamily: "'IBM Plex Mono'", fontSize: '12px', color: '#e8edf7' } }, fmtPrice(values[hover])),
+        React.createElement('div', { key: 'd', style: { fontFamily: "'IBM Plex Mono'", fontSize: '9.5px', color: '#7e8aa6', marginTop: '2px' } }, fmtChartDate(dates && dates[hover])),
+      ]),
+    ]
+  }
+
+  const plot = React.createElement('div', {
+    key: 'plot', ref: wrapRef, onMouseMove: onMove, onMouseLeave: () => setHover(null),
+    style: { position: 'relative', flex: '1 1 auto', minWidth: 0, height: height + 'px', cursor: 'crosshair' },
+  }, [svg].concat(overlay))
+
+  return React.createElement('div', { style: { display: 'flex', alignItems: 'stretch', height: height + 'px' } }, [plot, axis])
+}
+
 export default class App extends React.Component {
   constructor(props) {
     super(props)
@@ -37,10 +145,11 @@ export default class App extends React.Component {
       auth: 'loading',  // 'loading' | { user, role, canInvite } | null (signed out)
       authErr: null,    // ?auth_error= from the OAuth callback (e.g. 'not_invited')
       // email/password sign-in form
-      signMode: 'signin',  // 'signin' | 'forgot' | 'reset' | 'verify'
-      pwEmail: '', pwPass: '', pwPass2: '', pwCode: '',
+      signMode: 'signin',  // 'signin' | 'forgot' | 'reset' | 'verify' | 'accept'
+      pwEmail: '', pwPass: '', pwPass2: '', pwCode: '', pwFirst: '', pwLast: '',
       pwBusy: false, pwMsg: '', pwOk: '',
       resetToken: null, pendingToken: null,
+      inviteToken: null, inviteInfo: null,  // invitee accept flow: raw token + looked-up invitation
       profileOpen: false,  // profile menu popover
       avatarImgFailed: false,  // fall back to initials if the Google photo 404s
       inviteEmail: '', inviteState: 'idle', inviteMsg: '',  // PM invite form
@@ -62,22 +171,35 @@ export default class App extends React.Component {
 
   componentDidMount() {
     // Surface an OAuth callback error (e.g. ?auth_error=not_invited) on the sign-in page.
-    let authErr = null, resetToken = null
+    let authErr = null, resetToken = null, inviteToken = null
     try {
       const p = new URLSearchParams(window.location.search)
       authErr = p.get('auth_error')
       if (p.get('reset') && p.get('token')) resetToken = p.get('token')
-      if (authErr || resetToken) { window.history.replaceState({}, '', window.location.pathname) }
+      inviteToken = p.get('invitation_token')
+      if (authErr || resetToken || inviteToken) { window.history.replaceState({}, '', window.location.pathname) }
     } catch (e) { /* ignore */ }
     // Gate on sign-in first; only load portfolio data once authenticated.
     getMe()
       .then((me) => { this.setState({ auth: me }); this._loadData() })
-      .catch(() => this.setState({ auth: null, authErr, resetToken, signMode: resetToken ? 'reset' : 'signin' }))
+      .catch(() => {
+        const signMode = inviteToken ? 'accept' : resetToken ? 'reset' : 'signin'
+        this.setState({ auth: null, authErr, resetToken, inviteToken, signMode })
+        if (inviteToken) this._loadInvitation(inviteToken)
+      })
     // Re-render once a minute so the markets-open badge and date stay current.
     this._clock = setInterval(() => this.forceUpdate(), 30000)
   }
 
   componentWillUnmount() { if (this._clock) clearInterval(this._clock) }
+
+  // Resolve an invitation token to the invitee's email + state for the accept page.
+  _loadInvitation(token) {
+    this.setState({ inviteInfo: 'loading' })
+    getInvitation(token)
+      .then((info) => this.setState({ inviteInfo: info, pwEmail: info.email || '' }))
+      .catch(() => this.setState({ inviteInfo: 'invalid' }))
+  }
 
   // Live market status in US Eastern time (handles EST/EDT). NYSE regular
   // session runs Mon–Fri 9:30 AM–4:00 PM ET; markets are closed otherwise.
@@ -138,6 +260,21 @@ export default class App extends React.Component {
     verifyEmail(code, this.state.pendingToken)
       .then(() => this._afterLogin())
       .catch(() => this.setState({ pwBusy: false, pwMsg: 'Invalid or expired code.' }))
+  }
+
+  // Invitee 'set a password' path: create the account + accept the invite, then enter.
+  _acceptPassword() {
+    const { inviteToken, pwPass, pwPass2, pwFirst, pwLast } = this.state
+    if (!pwPass || this.state.pwBusy) return
+    if (pwPass.length < 8) { this.setState({ pwMsg: 'Use at least 8 characters.' }); return }
+    if (pwPass !== pwPass2) { this.setState({ pwMsg: 'Passwords don’t match.' }); return }
+    this.setState({ pwBusy: true, pwMsg: '', pwOk: '' })
+    acceptPassword({ invitationToken: inviteToken, password: pwPass, firstName: pwFirst.trim(), lastName: pwLast.trim() })
+      .then(() => this._afterLogin())
+      .catch((e) => this.setState({ pwBusy: false, pwMsg: String(e).includes('409')
+        ? 'That account already exists — sign in instead, or use Continue with Google.'
+        : String(e).includes('401') ? 'Could not set the password. Try Continue with Google.'
+        : 'Could not complete setup. Try again.' }))
   }
 
   _loadData() {
@@ -584,6 +721,43 @@ export default class App extends React.Component {
         <div onClick={() => this._verifyEmail()} style={primaryBtn}>{busy ? '…' : 'Verify'}</div>
         <div onClick={() => this.setState({ signMode: 'signin', pwMsg: '', pwOk: '' })} style={linkStyle}>‹ Back to sign in</div>
       </>)
+    } else if (mode === 'accept') {
+      const info = this.state.inviteInfo
+      const googleBtn = (
+        <a href={loginUrl(this.state.inviteToken)} style={s("display:flex;align-items:center;justify-content:center;gap:10px;text-decoration:none;background:#fff;color:#1a1a1a;border-radius:9px;padding:11px 14px;font:600 13px 'IBM Plex Sans';cursor:pointer;")}>
+          <svg width="17" height="17" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.97 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>
+          Continue with Google
+        </a>
+      )
+      const orRule = (
+        <div style={s('display:flex;align-items:center;gap:10px;margin:2px 0;')}><div style={s('flex:1;height:1px;background:#1d2840;')}></div><span style={s("font:500 9.5px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#3c465e;")}>or</span><div style={s('flex:1;height:1px;background:#1d2840;')}></div></div>
+      )
+      if (info === 'loading' || info == null) {
+        body = (<div style={s("font:400 12px 'IBM Plex Sans';color:#6b7794;text-align:center;padding:8px 0;")}>Checking your invitation…</div>)
+      } else if (info === 'invalid' || !info.pending) {
+        const msg = info === 'invalid' ? 'This invitation link is invalid or could not be found.'
+          : info.state === 'accepted' ? 'This invitation was already accepted — just sign in below.'
+          : info.state === 'revoked' ? 'This invitation was revoked. Ask your PM to send a new one.'
+          : 'This invitation has expired. Ask your PM to resend it.'
+        body = (<>
+          <div style={s("font:400 11.5px/1.6 'IBM Plex Sans';color:#ffb4b4;background:#2a1115;border:1px solid #4a1f25;border-radius:8px;padding:11px 13px;")}>{msg}</div>
+          <div onClick={() => this.setState({ signMode: 'signin', pwMsg: '', pwOk: '' })} style={primaryBtn}>Go to sign in</div>
+        </>)
+      } else {
+        body = (<>
+          {banners}
+          <div style={s("font:400 11.5px/1.6 'IBM Plex Sans';color:#9aa7c2;")}>You’ve been invited to the UOIG Endowment Terminal as <span style={s('color:#e8edf7;')}>{info.email}</span>. Set a password to finish — or continue with Google.</div>
+          <div style={s('display:grid;grid-template-columns:1fr 1fr;gap:10px;')}>
+            {field('First name', this.state.pwFirst, (v) => this.setState({ pwFirst: v }), 'text', () => this._acceptPassword(), 'Optional')}
+            {field('Last name', this.state.pwLast, (v) => this.setState({ pwLast: v }), 'text', () => this._acceptPassword(), 'Optional')}
+          </div>
+          {field('Create password', this.state.pwPass, (v) => this.setState({ pwPass: v }), 'password', () => this._acceptPassword(), 'At least 8 characters')}
+          {field('Confirm password', this.state.pwPass2, (v) => this.setState({ pwPass2: v }), 'password', () => this._acceptPassword())}
+          <div onClick={() => this._acceptPassword()} style={primaryBtn}>{busy ? '…' : 'Accept & enter'}</div>
+          {orRule}
+          {googleBtn}
+        </>)
+      }
     } else {
       body = (<>
         {banners}
@@ -599,7 +773,7 @@ export default class App extends React.Component {
         <div style={s("font:400 10.5px/1.5 'IBM Plex Sans';color:#5d6a85;text-align:center;")}>Access is invite-only — use the email or Google account that received your invitation.</div>
       </>)
     }
-    const heading = { signin: null, forgot: 'Reset your password', reset: 'Set a new password', verify: 'Verify your email' }[mode]
+    const heading = { signin: null, forgot: 'Reset your password', reset: 'Set a new password', verify: 'Verify your email', accept: 'Accept your invitation' }[mode]
     return (
       <div style={s("height:100vh;width:100%;display:flex;align-items:center;justify-content:center;background:radial-gradient(1200px 600px at 50% -10%,#0d1426,#070a12 60%);color:#e8edf7;font-family:'IBM Plex Sans',sans-serif;")}>
         <div style={s('width:380px;max-width:calc(100vw - 32px);display:flex;flex-direction:column;align-items:center;gap:18px;')}>
@@ -1160,7 +1334,7 @@ export default class App extends React.Component {
         {/* price chart (full width) */}
         <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
           <div style={s('display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;')}>
-            <span style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;")}>Price · vs {stk.benchShort}</span>
+            <span style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;")}>Price</span>
             <div style={s('display:flex;align-items:center;gap:3px;background:#0a0f1a;border:1px solid #1d2840;border-radius:8px;padding:3px;')}>{v.periods.map((p) => (<span key={p.k} onClick={p.on} style={{ ...s("padding:4px 9px;border-radius:5px;cursor:pointer;font-size:10px;font-family:'IBM Plex Mono';"), fontWeight: p.weight, background: p.bg, color: p.color }}>{p.k}</span>))}</div>
           </div>
           <div style={s("display:flex;gap:15px;font:500 10px 'IBM Plex Sans';margin-bottom:6px;")}>{v.stkChartLegend.map((l, i) => (<span key={i} style={{ color: l.color }}>{l.mark} {l.label}</span>))}</div>
@@ -1408,13 +1582,10 @@ export default class App extends React.Component {
           loStr: h.lo != null ? '$' + h.lo : '—', hiStr: h.hi != null ? '$' + h.hi : '—',
           rangePos: (h.lo != null && h.hi != null) ? Math.max(0, Math.min(100, (h.px - h.lo) / ((h.hi - h.lo) || 1) * 100)).toFixed(0) + '%' : '50%',
         }
-        const lines = []
-        if (sseries && sseries.close) lines.push({ values: sseries.close, color: accent, area: true })
-        const bs = held ? (st.series[`fund:${h.fund}:${per}`] || {}).bench : null
-        if (bs && bs.values && bs.values.length) lines.push({ values: bs.values, color: '#5d6a85', width: 1.4, dash: '4 4' })
-        v.stkChartEl = this._chart('stk' + h.t + per, lines, 230)
+        const stkVals = (sseries && sseries.close) ? sseries.close : []
+        const stkDates = (sseries && sseries.dates) ? sseries.dates : []
+        v.stkChartEl = React.createElement(PriceChart, { key: 'stk' + h.t + per, dates: stkDates, values: stkVals, color: accent, height: 230 })
         v.stkChartLegend = [{ mark: '●', color: accent, label: h.t }]
-        if (held) v.stkChartLegend.push({ mark: '┄', color: '#5d6a85', label: f.benchShort })
         v.stkSnapshot = [
           { l: 'Market Cap', v: mcStr, size: '17px' },
           { l: 'Fwd P/E', v: h.pe ? h.pe.toFixed(1) : '—', size: '17px' },
