@@ -73,6 +73,24 @@ export default class App extends React.Component {
     getMe()
       .then((me) => { this.setState({ auth: me }); this._loadData() })
       .catch(() => this.setState({ auth: null, authErr, resetToken, signMode: resetToken ? 'reset' : 'signin' }))
+    // Re-render once a minute so the markets-open badge and date stay current.
+    this._clock = setInterval(() => this.forceUpdate(), 30000)
+  }
+
+  componentWillUnmount() { if (this._clock) clearInterval(this._clock) }
+
+  // Live market status in US Eastern time (handles EST/EDT). NYSE regular
+  // session runs Mon–Fri 9:30 AM–4:00 PM ET; markets are closed otherwise.
+  // (Holidays are not accounted for.)
+  _marketStatus() {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', weekday: 'short', hourCycle: 'h23',
+      hour: '2-digit', minute: '2-digit', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date()).reduce((a, p) => (a[p.type] = p.value, a), {})
+    const weekday = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].indexOf(parts.weekday) >= 0
+    const mins = (+parts.hour) * 60 + (+parts.minute)
+    const open = weekday && mins >= 9 * 60 + 30 && mins < 16 * 60
+    return { open, date: `${parts.year}-${parts.month}-${parts.day}` }
   }
 
   // After a cookie-setting auth (password / verify), pull the session and enter the app.
@@ -645,7 +663,7 @@ export default class App extends React.Component {
             {v.fundTabs.map((t) => (<span key={t.k} onClick={t.on} style={{ ...s("padding:6px 15px;border-radius:6px;cursor:pointer;font-size:11.5px;font-family:'IBM Plex Sans';"), fontWeight: t.weight, background: t.bg, color: t.color }}>{t.label}</span>))}
           </div>
           <div style={s('flex:1;')}></div>
-          <div style={s("display:flex;align-items:center;gap:7px;font-family:'IBM Plex Mono';font-size:11px;color:#9aa7c2;")}><span style={s('width:7px;height:7px;border-radius:50%;background:#21d07a;animation:pulseDot 2s infinite;')}></span>MARKETS OPEN</div>
+          <div style={s("display:flex;align-items:center;gap:7px;font-family:'IBM Plex Mono';font-size:11px;color:#9aa7c2;")}><span style={{ ...s('width:7px;height:7px;border-radius:50%;'), background: v.marketOpen ? '#21d07a' : '#6b7794', animation: v.marketOpen ? 'pulseDot 2s infinite' : 'none' }}></span>{v.marketOpen ? 'MARKETS OPEN' : 'MARKETS CLOSED'}</div>
           <div style={s("font-family:'IBM Plex Mono';font-size:11px;color:#6b7794;")}>{v.asOf}</div>
         </div>
 
@@ -1238,7 +1256,9 @@ export default class App extends React.Component {
     const st = this.state, F = this.funds, keys = this.fundKeys
     const fundA = keys[0], fundB = keys[1]
     const v = {}
-    v.asOf = 'AS OF ' + String(st.data.asOf).slice(0, 10)
+    const mkt = this._marketStatus()
+    v.marketOpen = mkt.open
+    v.asOf = 'AS OF ' + mkt.date
     v.isDashboard = st.view === 'dashboard'; v.isStocks = st.view === 'stocks'
     v.isSectors = st.view === 'sectors'; v.isStock = st.view === 'stock'; v.isSector = st.view === 'sector'
     v.fundAName = F[fundA].name; v.fundBName = F[fundB].name
