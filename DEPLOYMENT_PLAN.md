@@ -136,14 +136,15 @@ The frontend needs a public backend URL, so host the backend before Vercel. Your
    - `UOIG_COOKIE_SECURE=1`.
    - `WORKOS_REDIRECT_URI=https://<this-host>/api/auth/callback`.
 4. **Note the public URL** (e.g. `https://uoig-terminal.onrender.com`) — you'll need it for Vercel and for the WorkOS redirect URI (§1.3).
-5. **Cross-origin prep (required once frontend is on a different domain).** Today
-   `api/main.py:39` sets `allow_origins=["*"]` and cookies are `SameSite=lax`. A
-   Vercel frontend on a *different* domain than the backend is a cross-site request,
-   which needs:
-   - CORS: replace `allow_origins=["*"]` with your exact Vercel origin **and** add `allow_credentials=True` (the wildcard is invalid with credentials).
-   - Cookies: change `samesite="lax"` to `samesite="none"` (and `secure=True`) in `_set_session_cookie` / the state cookie (`api/main.py:50`, `:86`) so the session cookie survives cross-site.
-   - Frontend: add `credentials: 'include'` to the fetches in `web/src/api.js` so the cookie is sent.
-   - **Simplest alternative:** put the frontend and backend on the **same parent domain** (e.g. `app.uoig.org` + `api.uoig.org`) and use a cookie `Domain` — then you can keep `SameSite=lax`. Recommended if you control DNS.
+5. **Cross-origin (implemented — just set env vars).** The split-deploy plumbing is
+   built and env-driven, so no code edits are needed. For a Vercel frontend on a
+   different origin than the Render backend, set on the **backend**:
+   - `CORS_ORIGINS=https://<your-app>.vercel.app` — exact frontend origin(s), comma-separated. Turns on `allow_credentials=True` (replacing the wildcard).
+   - `UOIG_COOKIE_SAMESITE=none` — lets the session cookie ride cross-site (auto-forces `Secure`).
+   - `FRONTEND_URL=https://<your-app>.vercel.app` — where the OAuth callback returns the user after sign-in.
+   The frontend already sends `credentials:'include'` on every call (`web/src/api.js`).
+   Local dev needs none of these — defaults stay same-origin (`SameSite=lax`, wildcard CORS).
+   - **Alternative (custom domain):** put both on one parent domain (`app.uoig.org` + `api.uoig.org`); then you can leave `UOIG_COOKIE_SAMESITE` at `lax`.
 
 ---
 
@@ -175,9 +176,11 @@ WORKOS_CLIENT_ID=client_...
 WORKOS_COOKIE_PASSWORD=<32+ char random>
 WORKOS_ORG_ID=org_...
 WORKOS_REDIRECT_URI=https://<backend-host>/api/auth/callback
-UOIG_COOKIE_SECURE=1
 ANTHROPIC_API_KEY=sk-ant-...
-DATABASE_URL=postgresql://...        # if Supabase Option B
+DATABASE_URL=postgresql://...               # Supabase pooler URI
+CORS_ORIGINS=https://<app>.vercel.app       # split deploy: exact frontend origin
+FRONTEND_URL=https://<app>.vercel.app       # post-OAuth redirect target
+UOIG_COOKIE_SAMESITE=none                   # cross-site cookie (auto-forces Secure)
 ```
 
 **Vercel (frontend):**

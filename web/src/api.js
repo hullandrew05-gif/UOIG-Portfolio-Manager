@@ -1,50 +1,37 @@
 // Thin client for the FastAPI backend.
-// Same-origin by default (single-container deploy); set VITE_API_BASE to point
-// at a remote backend (e.g. when the frontend later moves to Vercel).
+// Same-origin by default (single-container deploy); set VITE_API_BASE to point at
+// a remote backend (e.g. the Vercel frontend talking to the Render backend).
+// credentials:'include' sends the session cookie on every call — required when the
+// frontend and backend are on different origins (and harmless same-origin).
 const BASE = import.meta.env.VITE_API_BASE || ''
 const j = (r) => { if (!r.ok) throw new Error(r.status); return r.json() }
-
-export const getData = () => fetch(`${BASE}/api/data`).then(j)
-export const getSeries = (ticker, period) =>
-  fetch(`${BASE}/api/series/${encodeURIComponent(ticker)}?period=${period}`).then(j)
-export const getFundSeries = (fund, period) =>
-  fetch(`${BASE}/api/fund-series/${fund}?period=${period}`).then(j)
-export const getStock = (ticker) =>
-  fetch(`${BASE}/api/stock/${encodeURIComponent(ticker)}`).then(j)
-export const searchTickers = (q) =>
-  fetch(`${BASE}/api/search?q=${encodeURIComponent(q)}`).then(j)
-export const getQuote = (ticker) =>
-  fetch(`${BASE}/api/quote/${encodeURIComponent(ticker)}`).then(j)
-export const getPredictions = (ticker) =>
-  fetch(`${BASE}/api/predictions/${encodeURIComponent(ticker)}`).then(j)
-export const getThesis = (ticker) =>
-  fetch(`${BASE}/api/thesis/${encodeURIComponent(ticker)}`).then(j)
-export const postChat = (messages, context) =>
-  fetch(`${BASE}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, context }),
-  }).then(j)
-
-// ---- auth (WorkOS) ----
-// Same-origin requests send the session cookie automatically. The login redirect
-// is a full navigation (Google consent can't be fetched), so it's not here.
-export const getMe = () => fetch(`${BASE}/api/auth/me`).then(j)
-export const logout = () =>
-  fetch(`${BASE}/api/auth/logout`, { method: 'POST' }).then(j)
-export const loginUrl = () => `${BASE}/api/auth/login`
-export const sendInvite = (email, roleSlug) =>
-  fetch(`${BASE}/api/auth/invite`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, role_slug: roleSlug }),
-  }).then(j)
+const get = (path) => fetch(`${BASE}${path}`, { credentials: 'include' }).then(j)
 const post = (path, body) =>
   fetch(`${BASE}${path}`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify(body),
   }).then(j)
+
+export const getData = () => get('/api/data')
+export const getSeries = (ticker, period) =>
+  get(`/api/series/${encodeURIComponent(ticker)}?period=${period}`)
+export const getFundSeries = (fund, period) =>
+  get(`/api/fund-series/${fund}?period=${period}`)
+export const getStock = (ticker) => get(`/api/stock/${encodeURIComponent(ticker)}`)
+export const searchTickers = (q) => get(`/api/search?q=${encodeURIComponent(q)}`)
+export const getQuote = (ticker) => get(`/api/quote/${encodeURIComponent(ticker)}`)
+export const getPredictions = (ticker) => get(`/api/predictions/${encodeURIComponent(ticker)}`)
+export const getThesis = (ticker) => get(`/api/thesis/${encodeURIComponent(ticker)}`)
+export const postChat = (messages, context) => post('/api/chat', { messages, context })
+
+// ---- auth (WorkOS) ----
+// The login redirect is a full navigation (Google consent can't be fetched).
+export const getMe = () => get('/api/auth/me')
+export const logout = () => post('/api/auth/logout')
+export const loginUrl = () => `${BASE}/api/auth/login`
+export const sendInvite = (email, roleSlug) => post('/api/auth/invite', { email, role_slug: roleSlug })
 export const passwordLogin = (email, password) => post('/api/auth/password-login', { email, password })
 export const requestPasswordReset = (email) => post('/api/auth/password-reset', { email })
 export const confirmPasswordReset = (token, password) => post('/api/auth/password-reset/confirm', { token, password })

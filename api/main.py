@@ -5,6 +5,7 @@ Serves the React frontend's data from the existing analytics layer. Run:
 """
 from __future__ import annotations
 
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -45,7 +46,15 @@ from src.model.schema import get_connection  # noqa: E402
 
 CFG = load_config()
 app = FastAPI(title="UOIG Endowment Terminal API")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# Same-origin dev: wildcard CORS, no credentials. Split deploy (Vercel frontend +
+# separate backend): set CORS_ORIGINS to the exact frontend origin(s) so cookies
+# can ride cross-site (credentials require a non-wildcard origin).
+_CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+if _CORS_ORIGINS:
+    app.add_middleware(CORSMiddleware, allow_origins=_CORS_ORIGINS, allow_credentials=True,
+                       allow_methods=["*"], allow_headers=["*"])
+else:
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +67,12 @@ _AUTH_PUBLIC = ("/api/health", "/api/auth/")
 
 def _set_session_cookie(resp, sealed: str) -> None:
     resp.set_cookie(wc.COOKIE_NAME, sealed, max_age=wc.SESSION_MAX_AGE,
-                    httponly=True, samesite="lax", secure=wc.is_secure(), path="/")
+                    httponly=True, samesite=wc.cookie_samesite(), secure=wc.is_secure(), path="/")
+
+
+def _app_redirect(path: str = "/"):
+    """Redirect to the frontend origin (Vercel in a split deploy; same-origin otherwise)."""
+    return RedirectResponse(wc.frontend_url() + path, status_code=302)
 
 
 def _current(request: Request):
@@ -93,7 +107,7 @@ def auth_login():
     state = _secrets.token_urlsafe(24)
     resp = RedirectResponse(auth_sessions.authorization_url(state), status_code=302)
     resp.set_cookie(wc.STATE_COOKIE, state, max_age=600, httponly=True,
-                    samesite="lax", secure=wc.is_secure(), path="/")
+                    samesite=wc.cookie_samesite(), secure=wc.is_secure(), path="/")
     return resp
 
 
@@ -101,14 +115,14 @@ def auth_login():
 def auth_callback(request: Request, code: str = "", state: str = ""):
     """OAuth return: verify state, exchange code, enforce invite-only, set cookie."""
     if not code or not state or state != request.cookies.get(wc.STATE_COOKIE):
-        return RedirectResponse("/?auth_error=bad_state", status_code=302)
+        return _app_redirect("/?auth_error=bad_state")
     try:
         auth = auth_sessions.complete_login(code)
     except Exception:  # noqa: BLE001
-        return RedirectResponse("/?auth_error=auth_failed", status_code=302)
+        return _app_redirect("/?auth_error=auth_failed")
     if not auth_sessions.is_member(auth):
-        return RedirectResponse("/?auth_error=not_invited", status_code=302)
-    resp = RedirectResponse("/", status_code=302)
+        return _app_redirect("/?auth_error=not_invited")
+    resp = _app_redirect("/")
     resp.delete_cookie(wc.STATE_COOKIE, path="/")
     _set_session_cookie(resp, auth_sessions.seal(auth))
     return resp

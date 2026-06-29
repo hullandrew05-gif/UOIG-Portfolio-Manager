@@ -70,9 +70,25 @@ def redirect_uri() -> str:
     return os.environ.get("WORKOS_REDIRECT_URI") or "http://localhost:5173/api/auth/callback"
 
 
+def cookie_samesite() -> str:
+    """SameSite policy for the session cookie. Use 'none' for a cross-site split
+    (Vercel frontend + separate backend host); 'lax' for same-origin (default)."""
+    val = (os.environ.get("UOIG_COOKIE_SAMESITE") or "lax").strip().lower()
+    return val if val in ("lax", "none", "strict") else "lax"
+
+
 def is_secure() -> bool:
-    """Set UOIG_COOKIE_SECURE=1 in production (HTTPS) for Secure cookies."""
+    """Secure cookies in production (HTTPS). Forced on when SameSite=None, which
+    browsers require to be Secure. Set UOIG_COOKIE_SECURE=1 otherwise."""
+    if cookie_samesite() == "none":
+        return True
     return os.environ.get("UOIG_COOKIE_SECURE", "").lower() in ("1", "true", "yes")
+
+
+def frontend_url() -> str:
+    """Origin the backend redirects to after OAuth (the Vercel app in a split
+    deploy). Empty = same-origin, so redirects stay relative ('/')."""
+    return (os.environ.get("FRONTEND_URL") or "").rstrip("/")
 
 
 def auth_disabled() -> bool:
