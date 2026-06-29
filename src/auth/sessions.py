@@ -91,16 +91,36 @@ def authenticate(sealed: str) -> Tuple[Optional[object], Optional[str]]:
     return None, None
 
 
+def _user_email(res) -> Optional[str]:
+    u = getattr(res, "user", None)
+    if isinstance(u, dict):
+        return u.get("email")
+    return getattr(u, "email", None)
+
+
 def is_member(res) -> bool:
     """Invite-only gate: the user must belong to the configured WorkOS org.
 
-    A global Google sign-in for a non-invited address authenticates but carries no
-    org membership, so it fails here. When WORKOS_ORG_ID is unset we still require
-    *some* org membership (defence in depth), but setting it is strongly advised.
+    A plain Google/password sign-in often returns no `organization_id` even for a
+    real member (WorkOS only includes it for org-scoped sign-ins), so we can't
+    rely on that field alone. Fast-path on it when present, otherwise verify the
+    user's actual membership via the API (list_users filtered by org + email).
+    When WORKOS_ORG_ID is unset we accept any authenticated user (not advised).
     """
-    org = getattr(res, "organization_id", None)
     want = wc.org_id()
-    return bool(org) and (org == want if want else True)
+    if not want:
+        return True
+    org = getattr(res, "organization_id", None)
+    if org and org == want:
+        return True
+    email = _user_email(res)
+    if not email:
+        return False
+    try:
+        page = wc.client().user_management.list_users(organization_id=want, email=email)
+        return bool(getattr(page, "data", None))
+    except Exception:  # noqa: BLE001 — fail closed on API error
+        return False
 
 
 def user_payload(res) -> Tuple[dict, Optional[str]]:
