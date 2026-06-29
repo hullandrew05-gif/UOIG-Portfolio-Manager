@@ -15,6 +15,45 @@ funds:
 market_data:
   provider: "yfinance"        # swappable adapter (Phase 1): yfinance | tiingo | fmp
 
+# UOIG sector groups -> the GICS sectors they roll up, plus the iShares sector
+# ETFs the sector page tracks them against. Benchmark ETFs are pulled into the
+# price store by the nightly refresh (same path as the fund benchmarks), so the
+# sector chart reads from the DB and works on the hosted deploy (no live calls).
+sectors:
+  - name: "TMT"
+    gics: ["Technology", "Communication Services"]
+    benchmarks: ["IYW", "IYZ", "IGM"]
+  - name: "IME"
+    gics: ["Industrials", "Utilities", "Basic Materials", "Energy"]
+    benchmarks: ["IYJ", "IYE", "IYM", "IDU"]
+  - name: "Healthcare"
+    gics: ["Healthcare"]
+    benchmarks: ["IYH", "IBB", "IHI"]
+  - name: "Financial"
+    gics: ["Financial Services", "Real Estate"]
+    benchmarks: ["IYF", "IYG", "IYR"]
+  - name: "Consumer"
+    gics: ["Consumer Defensive", "Consumer Cyclical"]
+    benchmarks: ["IYK", "IYC"]
+
+# Display names for the iShares sector ETFs (shown on the sector chart legend/KPIs).
+benchmark_names:
+  IYW: "U.S. Technology"
+  IYZ: "U.S. Telecom"
+  IGM: "Expanded Tech"
+  IYJ: "U.S. Industrials"
+  IYE: "U.S. Energy"
+  IYM: "U.S. Materials"
+  IDU: "U.S. Utilities"
+  IYH: "U.S. Healthcare"
+  IBB: "Biotechnology"
+  IHI: "Medical Devices"
+  IYF: "U.S. Financials"
+  IYG: "U.S. Financial Svcs"
+  IYR: "U.S. Real Estate"
+  IYK: "U.S. Consumer Staples"
+  IYC: "U.S. Consumer Disc."
+
 risk:
   beta_window_years: 3
   beta_frequency: "daily"     # daily | weekly | monthly

@@ -56,6 +56,20 @@ def period_return(pf: pd.DataFrame, ticker: str, period: str, col: str = "adj_cl
     return float(w[col].iloc[-1] / w[col].iloc[0] - 1)
 
 
+def trailing_return(pf: pd.DataFrame, ticker: str, days: int):
+    """Simple price return over the trailing `days` calendar window (e.g. 7 for a
+    one-week move). Returns None if the ticker has too little history."""
+    s = pf[pf.ticker == ticker]
+    if len(s) < 2:
+        return None
+    last = s["date"].max()
+    w = s[s["date"] >= last - pd.Timedelta(days=days)]
+    if len(w) < 2:
+        w = s.tail(2)
+    base = w["close"].iloc[0]
+    return float(w["close"].iloc[-1] / base - 1) if base else None
+
+
 def mtd_return(pf: pd.DataFrame, ticker: str):
     s = pf[pf.ticker == ticker]
     if len(s) < 2:

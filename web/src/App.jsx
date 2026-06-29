@@ -1,5 +1,5 @@
 import React from 'react'
-import { getData, getSeries, getFundSeries, getStock, getPredictions, getThesis, postChat, searchTickers, getQuote, getMe, logout, loginUrl, sendInvite, passwordLogin, requestPasswordReset, confirmPasswordReset, verifyEmail, getInvitation, acceptPassword } from './api.js'
+import { getData, getSeries, getFundSeries, getSectorSeries, getStock, getPredictions, getThesis, postChat, searchTickers, getQuote, getMe, logout, loginUrl, sendInvite, passwordLogin, requestPasswordReset, confirmPasswordReset, verifyEmail, getInvitation, acceptPassword } from './api.js'
 
 // UOIG sector taxonomy: the five groups the club uses, each rolling up one or
 // more yfinance GICS sectors. Order here is the board's column order.
@@ -161,6 +161,7 @@ export default class App extends React.Component {
       sortKey: 'w', sortDir: 'desc', query: '',
       chat: [], input: '', loading: false,
       series: {},  // cache: key -> {dates, values/close, ...}
+      sectorSeries: {},  // cache: UOIG group -> {sector, benchmarks, movers} | 'loading' | 'error'
       stkDetail: {},  // cache: ticker -> {financials, earnings, news, research} | 'loading' | 'error'
       predictions: {},  // cache: ticker -> {cards} | 'loading' | 'error'
       theses: {},  // cache: ticker -> {thesis} | 'loading' | 'error'
@@ -375,6 +376,8 @@ export default class App extends React.Component {
         prev.period !== this.state.period || prev.ticker !== this.state.ticker) this._ensureSeries()
     if (prev.stkTab !== this.state.stkTab || prev.view !== this.state.view ||
         prev.ticker !== this.state.ticker) { this._ensurePredictions(); this._ensureThesis() }
+    if (this.state.view === 'sector' &&
+        (prev.view !== 'sector' || prev.sector !== this.state.sector)) this._ensureSectorSeries()
     const pl = (prev.chat && prev.chat.length) || 0
     if (this.chatRef.current && (pl !== this.state.chat.length || prev.loading !== this.state.loading))
       this.chatRef.current.scrollTop = this.chatRef.current.scrollHeight
@@ -540,6 +543,17 @@ export default class App extends React.Component {
     })
     this._ensureStockDetail()
     if (this.state.view === 'stock') this._ensureQuote()
+  }
+
+  // Sector page: value-weighted sector index + iShares benchmarks + weekly movers.
+  // Always the trailing one month (the page's comparison window), cached per group.
+  _ensureSectorSeries() {
+    const g = this.state.sector
+    if (!g || this.state.sectorSeries[g]) return
+    this.setState((st) => ({ sectorSeries: { ...st.sectorSeries, [g]: 'loading' } }))
+    getSectorSeries(g, '1M')
+      .then((res) => this.setState((st) => ({ sectorSeries: { ...st.sectorSeries, [g]: res } })))
+      .catch(() => this.setState((st) => ({ sectorSeries: { ...st.sectorSeries, [g]: 'error' } })))
   }
 
   // ---------- stock-detail tabs (live yfinance) ----------
@@ -1398,6 +1412,44 @@ export default class App extends React.Component {
           <div><div style={s("font:600 22px 'IBM Plex Sans';color:#e8edf7;")}>{sec.name}</div></div>
           <div style={s('text-align:right;')}><div style={s("font-family:'IBM Plex Mono';font-size:24px;color:#e8edf7;")}>{sec.shareStr}</div><div style={{ ...s("font-family:'IBM Plex Mono';font-size:11px;margin-top:2px;"), color: sec.retColor }}>MTD {sec.ret}</div></div>
         </div>
+        {/* sector vs iShares benchmarks (last month) + weekly movers */}
+        {v.secState === 'ready' ? (
+          <React.Fragment>
+            <div style={{ ...s('display:grid;gap:10px;'), gridTemplateColumns: 'repeat(' + v.secKpis.length + ',minmax(0,1fr))' }}>
+              {v.secKpis.map((k, i) => (
+                <div key={i} style={{ ...s('background:#0e1422;border:1px solid #1d2840;border-radius:0 8px 8px 0;padding:10px 12px;'), borderLeft: '3px solid ' + k.color }}>
+                  <div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.05em;text-transform:uppercase;color:#6b7794;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{k.label}</div>
+                  <div style={{ ...s("font-family:'IBM Plex Mono';font-size:18px;margin-top:4px;"), color: k.valColor }}>{k.val}</div>
+                </div>
+              ))}
+            </div>
+            <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:14px;')}>
+              <div style={s('display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;')}>
+                <span style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;")}>Last month · indexed %</span>
+                <div style={s("display:flex;gap:13px;font:500 10px 'IBM Plex Sans';flex-wrap:wrap;")}>{v.secChartLegend.map((l, i) => (<span key={i} style={{ color: l.color }}>{l.mark} {l.label}</span>))}</div>
+              </div>
+              <div style={s('height:168px;')}>{v.secChartEl}</div>
+            </div>
+            <div style={s('display:grid;grid-template-columns:1fr 1fr;gap:11px;')}>
+              {[{ t: 'Leaders · 1 week', rows: v.secTop }, { t: 'Laggards · 1 week', rows: v.secBottom }].map((col, ci) => (
+                <div key={ci} style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:12px 13px;')}>
+                  <div style={s("font:600 9px 'IBM Plex Sans';letter-spacing:.07em;text-transform:uppercase;color:#6b7794;margin-bottom:6px;")}>{col.t}</div>
+                  {col.rows.map((m, i) => (
+                    <div key={i} onClick={m.on} className="dc-row" style={s('display:flex;align-items:center;gap:9px;padding:7px 0;border-bottom:1px solid #131c2f;cursor:pointer;')}>
+                      <span style={s("font-family:'IBM Plex Mono';font-weight:500;font-size:12px;color:#e8edf7;width:54px;")}>{m.t}</span>
+                      <span style={s("font:400 10px 'IBM Plex Sans';color:#8290ad;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;")}>{m.n}</span>
+                      <span style={{ ...s("font-family:'IBM Plex Mono';font-size:12px;"), color: m.color }}>{m.pct}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </React.Fragment>
+        ) : (
+          <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:30px;display:flex;justify-content:center;color:#5d6a85;font:500 11px \'IBM Plex Sans\';')}>{v.secState === 'error' ? 'Could not load sector comparison data.' : 'Loading sector comparison…'}</div>
+        )}
+        {/* full composition + holdings (unchanged, below the comparison) */}
+        <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;margin-top:4px;")}>Composition</div>
         <div style={{ ...s('display:grid;gap:11px;'), gridTemplateColumns: 'repeat(' + (1 + sec.wTiles.length) + ',1fr)' }}>
           <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:13px;')}><div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;")}>Holdings</div><div style={s("font-family:'IBM Plex Mono';font-size:18px;color:#e8edf7;margin-top:5px;")}>{sec.count}</div></div>
           {sec.wTiles.map((t, i) => (
@@ -1634,8 +1686,26 @@ export default class App extends React.Component {
       const wTiles = []
       if (fk === 'all' || fk === fundA) wTiles.push({ label: F[fundA].name + ' Wt', color: '#5a93f9', val: (a.wByFund[fundA] || 0).toFixed(1) + '%' })
       if (fk === 'all' || fk === fundB) wTiles.push({ label: F[fundB].name + ' Wt', color: '#f4a531', val: (a.wByFund[fundB] || 0).toFixed(1) + '%' })
-      v.sec = { name: a.name, shareStr: a.share.toFixed(1) + '%', count: a.count, ret: this._sign(a.ret, 1) + '%', retColor: this._col(a.ret), wTiles }
+      v.sec = { name: a.name, shareStr: a.share.toFixed(1) + '%', count: a.count, ret: this._sign(a.ret, 1) + '%', retColor: this._col(a.ret), wTiles, color: a.color }
       v.secRows = a.holdings.slice().sort((x, y) => y.w - x.w).map((h) => this._rowVM(h, 'sector'))
+
+      // Comparison chart (this sector vs iShares benchmarks, 1M) + weekly movers.
+      const ss = st.sectorSeries[st.sector]
+      v.secState = ss === 'loading' ? 'loading' : ss === 'error' ? 'error' : (ss ? 'ready' : 'loading')
+      if (v.secState === 'ready') {
+        const pal = ['#5a93f9', '#f4a531', '#8aa0c8', '#3fb6c0']
+        const lines = []
+        if (ss.sector && ss.sector.values && ss.sector.values.length) lines.push({ values: ss.sector.values, color: a.color, area: true, width: 2 })
+        ss.benchmarks.forEach((b, i) => { if (b.values && b.values.length) lines.push({ values: b.values, color: pal[i % pal.length], width: 1.5 }) })
+        v.secChartEl = this._chart('sec' + st.sector, lines, 168)
+        v.secChartLegend = [{ mark: '●', color: a.color, label: a.name }]
+          .concat(ss.benchmarks.map((b, i) => ({ mark: '┄', color: pal[i % pal.length], label: b.ticker })))
+        v.secKpis = [{ label: a.name + ' · 1M', val: this._sign((ss.sector.ret || 0) * 100, 1) + '%', color: a.color, valColor: this._col(ss.sector.ret || 0), hero: true }]
+          .concat(ss.benchmarks.map((b, i) => ({ label: b.ticker + ' · ' + b.name, val: this._sign((b.ret || 0) * 100, 1) + '%', color: pal[i % pal.length], valColor: '#cdd6e8' })))
+        const mv = (m) => ({ t: m.t, n: m.n, pct: this._sign(m.ret * 100, 1) + '%', color: this._col(m.ret), on: () => this._openStock(m.t, 'sector') })
+        v.secTop = ((ss.movers && ss.movers.top) || []).map(mv)
+        v.secBottom = ((ss.movers && ss.movers.bottom) || []).map(mv)
+      }
     }
 
     // claude dock

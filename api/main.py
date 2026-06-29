@@ -43,7 +43,7 @@ from src.ingest.thesis import stock_thesis  # noqa: E402
 from src.assistant import answer as llm_answer, api_key as llm_key  # noqa: E402
 from src.analytics.risk import daily_returns_matrix  # noqa: E402
 from src.analytics.series import (price_frame, period_return, synthetic_index,  # noqa: E402
-                                  ticker_series)
+                                  ticker_series, trailing_return)
 from src.config import db_path, load_config  # noqa: E402
 from src.model.schema import get_connection  # noqa: E402
 
@@ -439,6 +439,69 @@ def fund_series(fund: str, period: str = "YTD"):
         bs = ticker_series(pf := price_frame(conn), bench, period)
         bvals = [round(v / bs["close"][0] * 100, 3) for v in bs["close"]] if bs["close"] else []
         return {"fund": syn, "bench": {"dates": bs["dates"], "values": bvals, "ticker": bench}}
+    finally:
+        conn.close()
+
+
+def _sector_cfg(group: str):
+    for s in (CFG.get("sectors") or []):
+        if str(s.get("name", "")).lower() == group.lower():
+            return s
+    return None
+
+
+@app.get("/api/sector-series/{group}")
+def sector_series(group: str, period: str = "1M"):
+    """Sector detail chart + weekly movers. Returns the value-weighted sector
+    index (rebased), each mapped iShares benchmark ETF (rebased), and the top/
+    bottom 3 holdings by trailing one-week return. All read from the price store."""
+    sc = _sector_cfg(group)
+    if not sc:
+        raise HTTPException(404, f"unknown sector {group}")
+    conn = _conn()
+    try:
+        pf = price_frame(conn)
+        rets = daily_returns_matrix(conn, (CFG.get("risk") or {}).get("beta_window_years", 3))
+        pos = load_positions(CFG, conn)
+        gics = set(sc.get("gics") or [])
+        funda = {r[0]: r[1] for r in conn.execute(
+            "SELECT ticker, gics_sector FROM fundamentals").fetchall()}
+
+        # value-weighted sector index across BOTH funds (aggregate by ticker)
+        weights, names = {}, {}
+        for r in pos[pos.sec_type != "cash"].itertuples():
+            sec = funda.get(r.ticker) or r.sector
+            if sec in gics:
+                weights[r.ticker] = weights.get(r.ticker, 0.0) + float(r.market_value or 0)
+                names[r.ticker] = r.name
+        syn = synthetic_index(rets, weights, period)
+
+        names_map = CFG.get("benchmark_names") or {}
+        benchmarks = []
+        for etf in (sc.get("benchmarks") or []):
+            bs = ticker_series(pf, etf, period)
+            if not bs["close"]:
+                continue
+            base = bs["close"][0]
+            benchmarks.append({
+                "ticker": etf, "name": names_map.get(etf, etf),
+                "dates": bs["dates"],
+                "values": [round(v / base * 100, 3) for v in bs["close"]],
+                "ret": period_return(pf, etf, period),
+            })
+
+        movers = [{"t": t, "n": names.get(t, t), "ret": trailing_return(pf, t, 7)}
+                  for t in weights]
+        movers = [m for m in movers if m["ret"] is not None]
+        movers.sort(key=lambda m: m["ret"], reverse=True)
+        top = movers[:3]
+        top_set = {m["t"] for m in top}
+        bottom = [m for m in reversed(movers) if m["t"] not in top_set][:3]
+        return {
+            "group": sc["name"], "period": period,
+            "sector": syn, "benchmarks": benchmarks,
+            "movers": {"top": top, "bottom": bottom},
+        }
     finally:
         conn.close()
 

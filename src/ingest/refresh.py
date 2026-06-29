@@ -27,7 +27,9 @@ def _universe(conn: sqlite3.Connection, cfg: dict) -> tuple[list[str], set[str]]
     for k in (risk.get("market_proxy"), risk.get("risk_free")):
         if k:
             bench.add(k)
-    return sorted(set(held) | bench), bench
+    # iShares sector ETFs the sector page charts against (config `sectors`).
+    sector_etfs = {t for s in (cfg.get("sectors") or []) for t in (s.get("benchmarks") or [])}
+    return sorted(set(held) | bench | sector_etfs), bench
 
 
 def refresh(cfg: dict, history_years: float | None = None,
