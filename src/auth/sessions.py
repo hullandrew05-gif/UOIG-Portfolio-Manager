@@ -24,6 +24,30 @@ def complete_login(code: str):
     return wc.client().user_management.authenticate_with_code(code=code)
 
 
+# ---- email + password (and the reset / verification flows) ----
+def password_login(email: str, password: str):
+    """Authenticate with email + password -> AuthenticateResponse.
+    Raises workos._errors types (AuthenticationError, EmailVerificationRequiredError, …)."""
+    return wc.client().user_management.authenticate_with_password(email=email, password=password)
+
+
+def request_password_reset(email: str):
+    """Create a password-reset token; WorkOS emails the reset link to the user."""
+    return wc.client().user_management.reset_password(email=email)
+
+
+def confirm_reset(token: str, new_password: str):
+    """Complete a reset (also how invited users set their first password)."""
+    return wc.client().user_management.confirm_password_reset(token=token, new_password=new_password)
+
+
+def verify_email(code: str, pending_token: str):
+    """Finish an email-verification challenge -> AuthenticateResponse."""
+    return wc.client().user_management.authenticate_with_email_verification(
+        code=code, pending_authentication_token=pending_token,
+    )
+
+
 def seal(auth) -> str:
     """Encode an AuthenticateResponse into a sealed session string for the cookie."""
     from workos.session import seal_session_from_auth_response

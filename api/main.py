@@ -6,9 +6,14 @@ Serves the React frontend's data from the existing analytics layer. Run:
 from __future__ import annotations
 
 import sys
+import warnings
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# pandas warns when read_sql gets a raw psycopg connection (vs SQLAlchemy); the
+# queries work fine on both backends, so quiet the cosmetic noise.
+warnings.filterwarnings("ignore", message="pandas only supports SQLAlchemy")
 
 import secrets as _secrets  # noqa: E402
 
@@ -21,6 +26,10 @@ from api.build import FUND_META, build_terminal_data  # noqa: E402
 from src.auth import sessions as auth_sessions  # noqa: E402
 from src.auth import invitations as auth_invites  # noqa: E402
 from src.auth import workos_client as wc  # noqa: E402
+from workos._errors import (AuthenticationError, BadRequestError,  # noqa: E402
+                            EmailPasswordAuthDisabledError,
+                            EmailVerificationRequiredError,
+                            UnprocessableEntityError, WorkOSError)
 from src.analytics.pnl import load_positions  # noqa: E402
 from src.ingest.research import stock_research  # noqa: E402
 from src.ingest.lookup import (search_symbols, quote_overview,  # noqa: E402
@@ -103,6 +112,85 @@ def auth_callback(request: Request, code: str = "", state: str = ""):
     resp.delete_cookie(wc.STATE_COOKIE, path="/")
     _set_session_cookie(resp, auth_sessions.seal(auth))
     return resp
+
+
+def _finish_auth(auth):
+    """Shared finalize for the JSON auth routes: enforce invite-only, then set the
+    sealed session cookie. Mirrors the Google callback's member check + seal."""
+    if not auth_sessions.is_member(auth):
+        raise HTTPException(403, "not_invited")
+    resp = JSONResponse({"ok": True})
+    _set_session_cookie(resp, auth_sessions.seal(auth))
+    return resp
+
+
+@app.post("/api/auth/password-login")
+def auth_password_login(payload: dict):
+    """Email + password sign-in. Invite-only gate still applies."""
+    if not wc.configured():
+        raise HTTPException(503, "WorkOS is not configured on the server")
+    email = (payload.get("email") or "").strip()
+    password = payload.get("password") or ""
+    if not email or not password:
+        raise HTTPException(400, "email and password are required")
+    try:
+        auth = auth_sessions.password_login(email, password)
+    except EmailVerificationRequiredError as exc:
+        return JSONResponse({"needsVerification": True,
+                             "pendingToken": getattr(exc, "pending_authentication_token", None)})
+    except EmailPasswordAuthDisabledError:
+        raise HTTPException(503, "email/password sign-in isn't enabled")
+    except (AuthenticationError, BadRequestError, UnprocessableEntityError):
+        raise HTTPException(401, "invalid email or password")
+    except WorkOSError:
+        raise HTTPException(401, "invalid email or password")
+    return _finish_auth(auth)
+
+
+@app.post("/api/auth/verify-email")
+def auth_verify_email(payload: dict):
+    """Complete an email-verification challenge raised during password sign-in."""
+    code = (payload.get("code") or "").strip()
+    token = payload.get("pendingToken") or ""
+    if not code or not token:
+        raise HTTPException(400, "code and pendingToken are required")
+    try:
+        auth = auth_sessions.verify_email(code, token)
+    except WorkOSError:
+        raise HTTPException(401, "invalid or expired code")
+    return _finish_auth(auth)
+
+
+@app.post("/api/auth/password-reset")
+def auth_password_reset(payload: dict):
+    """Request a password-reset email (also how invited users set a first password).
+    Always returns ok so we don't reveal whether an address has an account."""
+    if not wc.configured():
+        raise HTTPException(503, "WorkOS is not configured on the server")
+    email = (payload.get("email") or "").strip()
+    if not email:
+        raise HTTPException(400, "email is required")
+    try:
+        auth_sessions.request_password_reset(email)
+    except WorkOSError:
+        pass
+    return {"ok": True}
+
+
+@app.post("/api/auth/password-reset/confirm")
+def auth_password_reset_confirm(payload: dict):
+    """Set a new password from a reset token emailed by WorkOS."""
+    if not wc.configured():
+        raise HTTPException(503, "WorkOS is not configured on the server")
+    token = (payload.get("token") or "").strip()
+    password = payload.get("password") or ""
+    if not token or not password:
+        raise HTTPException(400, "token and password are required")
+    try:
+        auth_sessions.confirm_reset(token, password)
+    except WorkOSError:
+        raise HTTPException(400, "invalid or expired reset link")
+    return {"ok": True}
 
 
 @app.get("/api/auth/me")
