@@ -75,6 +75,7 @@ function PriceChart({ dates, values, color, height }) {
   const gridY = (f) => +(padT + plotH * f).toFixed(1)
 
   const svg = React.createElement('svg', {
+    key: 'svg',
     viewBox: '0 0 ' + W + ' ' + height, preserveAspectRatio: 'none',
     style: { width: '100%', height: '100%', display: 'block' },
   }, [
@@ -1377,12 +1378,6 @@ export default class App extends React.Component {
                 </div>
                 )}
               </div>
-              <div style={s('background:linear-gradient(180deg,#140f2c,#0c0d1f);border:1px solid #241f3e;border-radius:9px;padding:15px;')}>
-                <div style={s("display:flex;align-items:center;gap:7px;font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#c3b9ff;margin-bottom:11px;")}><span style={s('font-size:13px;')}>✦</span>Ask Claude about {stk.t}</div>
-                <div style={s('display:flex;flex-direction:column;gap:7px;')}>
-                  {v.stkAskChips.map((a, i) => (<div key={i} onClick={a.on} style={s('font-size:11px;color:#cdc6ee;background:#15112c;border:1px solid #2c2550;border-radius:7px;padding:9px 11px;cursor:pointer;')}>{a.text}</div>))}
-                </div>
-              </div>
             </div>
           </div>
         )}
@@ -1627,12 +1622,6 @@ export default class App extends React.Component {
           v.stkPos = null
         }
         v.stkBackLabel = st.prevView === 'stocks' ? 'All Holdings' : (st.prevView === 'sector' ? (st.sector || 'Sector') : 'Dashboard')
-        v.stkAskChips = [
-          { text: 'What’s the bull and bear case for ' + h.t + '?', on: () => this._send('What’s the bull and bear case for ' + h.t + '?') },
-          { text: 'Is the ' + (h.pe ? h.pe.toFixed(0) : '') + 'x P/E justified?', on: () => this._send('Is ' + h.t + '’s P/E justified given its growth and risk?') },
-          held ? { text: 'How does it fit the ' + f.name + ' mandate?', on: () => this._send('How does ' + h.t + ' fit the ' + f.name + ' mandate?') }
-               : { text: 'Would ' + h.t + ' fit our mandate?', on: () => this._send('Would ' + h.t + ' fit the UOIG mandate? It is not currently held.') },
-        ]
       }
     }
 
