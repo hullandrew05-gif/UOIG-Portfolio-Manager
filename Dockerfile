@@ -19,6 +19,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY api/ ./api/
 COPY src/ ./src/
 COPY config.yaml ./
+# Curated markdown the backend reads at runtime from the repo root:
+# predictions.py -> PREDICTION_MARKETS.md (Predictions tab), thesis.py -> THESIS.md (Thesis tab).
+# Without these the maps parse empty and both tabs render their "nothing mapped" stub.
+COPY PREDICTION_MARKETS.md THESIS.md ./
 COPY --from=web /web/dist ./web/dist
 # No SQLite DB baked in — production reads Postgres via DATABASE_URL (Supabase).
 # Bind the platform-provided $PORT (Render/Fly inject it); default 8000 locally.

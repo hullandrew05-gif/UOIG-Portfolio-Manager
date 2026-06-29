@@ -174,9 +174,21 @@ def _financials(tk):
     if margin is not None:
         cap_bits.append(f"net margin {margin:.0f}%")
     financials = {"bars": bars, "rows": rows, "caption": " · ".join(cap_bits)}
+
+    # Reported EPS per quarter (newest..oldest, up to 4) from the income statement.
+    # Lets _earnings degrade gracefully when tk.earnings_dates is unavailable —
+    # common on datacenter IPs, where that Yahoo endpoint returns empty.
+    eps_hist = []
+    if eps is not None:
+        for c in cols[:4]:
+            a = _num(eps[c])
+            if a is not None:
+                eps_hist.append({"q": _qlabel(c), "ts": c, "act": f"{a:.2f}"})
+
     rev_summary = {
         "revActual": _money(rev[latest]) if rev is not None else None,
         "revYoY": _pct(rev_yoy, 0) if rev_yoy is not None else None,
+        "epsHist": eps_hist,
     }
     return financials, rev_summary
 
@@ -211,7 +223,21 @@ def _earnings(tk, rev_summary):
                 "epsEst": f"{_num(r0.get('EPS Estimate')):.2f}" if _num(r0.get("EPS Estimate")) is not None else "—",
             }
     if most is None:
-        return None
+        # tk.earnings_dates returned nothing (often blocked on cloud IPs). Fall back
+        # to the quarterly income-statement EPS already pulled in _financials. No
+        # estimate/surprise is available there, so those columns show "—".
+        eh = (rev_summary or {}).get("epsHist") or []
+        if not eh:
+            return None
+        d = pd.Timestamp(eh[0]["ts"])
+        most = {
+            "qtrLabel": f"{((d.month - 1) // 3) + 1}Q FY{d.year}",
+            "when": "qtr ended " + d.strftime("%b %d, %Y"),
+            "beat": None,
+            "epsActual": f"${float(eh[0]['act']):.2f}",
+            "epsEst": "—",
+        }
+        history = [{"q": h["q"], "est": "—", "act": h["act"], "surprise": "—"} for h in eh]
 
     nextd = "—"
     edates = cal.get("Earnings Date")
