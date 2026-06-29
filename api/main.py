@@ -268,6 +268,13 @@ def auth_accept_password(payload: dict):
         pass
     try:
         auth = auth_sessions.password_login(inv.email, password, invitation_token=token)
+    except EmailVerificationRequiredError as exc:
+        # WorkOS creates the user with an unverified email, so the first password
+        # sign-in needs a one-time code (emailed automatically). Hand the pending
+        # token to the frontend; the verify-email step finishes auth AND accepts
+        # the invitation. (Google sign-in skips this — Google asserts the email.)
+        return JSONResponse({"needsVerification": True,
+                             "pendingToken": getattr(exc, "pending_authentication_token", None)})
     except EmailPasswordAuthDisabledError:
         raise HTTPException(503, "email/password sign-in isn't enabled")
     except WorkOSError:

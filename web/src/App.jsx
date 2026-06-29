@@ -271,7 +271,10 @@ export default class App extends React.Component {
     if (pwPass !== pwPass2) { this.setState({ pwMsg: 'Passwords don’t match.' }); return }
     this.setState({ pwBusy: true, pwMsg: '', pwOk: '' })
     acceptPassword({ invitationToken: inviteToken, password: pwPass, firstName: pwFirst.trim(), lastName: pwLast.trim() })
-      .then(() => this._afterLogin())
+      .then((r) => {
+        if (r && r.needsVerification) { this.setState({ pwBusy: false, signMode: 'verify', pendingToken: r.pendingToken, pwOk: 'Enter the code we emailed you to finish setting up your account.' }); return }
+        this._afterLogin()
+      })
       .catch((e) => this.setState({ pwBusy: false, pwMsg: String(e).includes('409')
         ? 'That account already exists — sign in instead, or use Continue with Google.'
         : String(e).includes('401') ? 'Could not set the password. Try Continue with Google.'
