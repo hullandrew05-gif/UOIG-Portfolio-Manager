@@ -32,11 +32,17 @@ def complete_login(code: str, invitation_token: Optional[str] = None):
 
 def create_user_with_password(email: str, password: str,
                               first_name: Optional[str] = None,
-                              last_name: Optional[str] = None):
+                              last_name: Optional[str] = None,
+                              email_verified: bool = True):
     """Create a WorkOS user with an initial password (invitee 'set a password'
-    path). Raises if a user with that email already exists."""
+    path). Raises if a user with that email already exists.
+
+    `email_verified` defaults to True: this account is only reachable via an
+    invitation link emailed to `email`, so receiving it already proves control
+    of the inbox. Marking the email verified up front skips the one-time-code
+    challenge WorkOS would otherwise require on the first password sign-in."""
     return wc.client().user_management.create_user(
-        email=email, password=password,
+        email=email, password=password, email_verified=email_verified,
         first_name=first_name or None, last_name=last_name or None,
     )
 
