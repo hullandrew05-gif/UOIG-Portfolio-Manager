@@ -5,12 +5,15 @@ Serves the React frontend's data from the existing analytics layer. Run:
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import warnings
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+log = logging.getLogger("uoig.auth")
 
 # pandas warns when read_sql gets a raw psycopg connection (vs SQLAlchemy); the
 # queries work fine on both backends, so quiet the cosmetic noise.
@@ -255,30 +258,46 @@ def auth_accept_password(payload: dict):
         raise HTTPException(404, "invitation not found")
     if getattr(inv.state, "value", inv.state) != "pending":
         raise HTTPException(409, "this invitation is no longer valid")
+    user_existed = False
     try:
         auth_sessions.create_user_with_password(
             inv.email, password,
             (payload.get("firstName") or "").strip(),
             (payload.get("lastName") or "").strip(),
         )
-    except (BadRequestError, UnprocessableEntityError):
-        # Most likely the account already exists — fall through to authenticate,
-        # which succeeds if they typed their existing password (and accepts the
-        # invite), or 401s below if not.
-        pass
+    except (BadRequestError, UnprocessableEntityError) as exc:
+        # "Email already in use" is benign — the invitee started before, so fall
+        # through and authenticate. Any OTHER create failure must surface (don't
+        # silently swallow it and 401 later with a misleading message).
+        emsg = str(getattr(exc, "message", "") or exc).lower()
+        if any(k in emsg for k in ("already", "taken", "exists", "in use")):
+            user_existed = True
+            log.info("accept-password: %s already exists; authenticating instead", inv.email)
+        else:
+            log.exception("accept-password: create_user failed for %s", inv.email)
+            raise HTTPException(400, f"could not create the account: {getattr(exc, 'message', exc)}")
     try:
         auth = auth_sessions.password_login(inv.email, password, invitation_token=token)
     except EmailVerificationRequiredError as exc:
-        # WorkOS creates the user with an unverified email, so the first password
-        # sign-in needs a one-time code (emailed automatically). Hand the pending
-        # token to the frontend; the verify-email step finishes auth AND accepts
-        # the invitation. (Google sign-in skips this — Google asserts the email.)
+        # Safety net: if WorkOS still requires a one-time code (e.g. a pre-existing
+        # unverified account), hand the pending token to the frontend so the
+        # verify-email step finishes auth AND accepts the invitation.
         return JSONResponse({"needsVerification": True,
                              "pendingToken": getattr(exc, "pending_authentication_token", None)})
     except EmailPasswordAuthDisabledError:
         raise HTTPException(503, "email/password sign-in isn't enabled")
-    except WorkOSError:
-        raise HTTPException(401, "could not complete sign-in — try 'Continue with Google' instead")
+    except AuthenticationError as exc:
+        # Bad credentials. If the account already existed, the most likely cause is
+        # a different password from a prior attempt — tell the user plainly so they
+        # sign in (or use Google) rather than seeing a generic failure.
+        log.warning("accept-password: auth failed for %s (existed=%s): %s",
+                    inv.email, user_existed, getattr(exc, "message", exc))
+        if user_existed:
+            raise HTTPException(409, "account_exists")
+        raise HTTPException(401, "could not complete sign-in")
+    except WorkOSError as exc:
+        log.exception("accept-password: unexpected WorkOS error for %s", inv.email)
+        raise HTTPException(401, f"could not complete sign-in: {getattr(exc, 'message', exc)}")
     return _finish_auth(auth)
 
 
