@@ -35,6 +35,13 @@ function fmtChartDate(d) {
   if (p.length < 3) return String(d)
   return MONTHS[(+p[1]) - 1] + ' ' + (+p[2]) + ', ' + p[0]
 }
+// Compact x-axis date: "Jun 27" for sub-year windows, "Jun '25" when the range spans years.
+function fmtAxisDate(d, longSpan) {
+  if (!d) return ''
+  const p = String(d).split('-')
+  if (p.length < 3) return String(d)
+  return longSpan ? MONTHS[(+p[1]) - 1] + " '" + p[0].slice(2) : MONTHS[(+p[1]) - 1] + ' ' + (+p[2])
+}
 
 // Interactive single-line price chart with a price axis and a hover readout.
 // Used on the stock page (the fund/hero charts still use App._chart).
@@ -135,6 +142,87 @@ function PriceChart({ dates, values, color, height }) {
   }, [svg].concat(overlay))
 
   return React.createElement('div', { style: { display: 'flex', alignItems: 'stretch', height: height + 'px' } }, [plot, axis])
+}
+
+// Interactive multi-line indexed-return chart (sector page): a % y-axis, a date
+// x-axis, and a hover readout listing the date plus every series (our holdings +
+// each iShares index). Each `series` is {label, color, values, area?} where
+// values are indexed to 100 at the period start (so % change = value - 100).
+function IndexChart({ dates, series, height }) {
+  const [hover, setHover] = React.useState(null)
+  const wrapRef = React.useRef(null)
+  const lines = (series || []).filter((s2) => s2.values && s2.values.length)
+  if (!lines.length) return React.createElement('div', { style: { height: height + 'px' } })
+
+  const W = 900, padT = 8, padB = 8, axisH = 18
+  const plotH = height - axisH, innerH = plotH - padT - padB
+  let min = Infinity, max = -Infinity
+  lines.forEach((s2) => s2.values.forEach((v) => { if (v < min) min = v; if (v > max) max = v }))
+  if (!(max > min)) { min -= 1; max += 1 }
+  const span = (max - min) || 1
+  const Y = (v) => +(plotH - padB - ((v - min) / span) * innerH).toFixed(2)
+  const xAt = (i, n) => +((i / ((n - 1) || 1)) * W).toFixed(2)
+  const path = (vals) => vals.map((v, i) => (i ? 'L' : 'M') + xAt(i, vals.length) + ',' + Y(v)).join(' ')
+
+  const TN = 4, ticks = []
+  for (let k = 0; k <= TN; k++) { const val = min + (span * k) / TN; ticks.push({ val, y: Y(val) }) }
+  const fmtPct = (v) => (v - 100 >= 0 ? '+' : '') + (v - 100).toFixed(1) + '%'
+
+  const nd = (dates && dates.length) || 0
+  const longSpan = nd > 1 && String(dates[0]).slice(0, 4) !== String(dates[nd - 1]).slice(0, 4)
+  const xticks = []
+  if (nd) for (let k = 0; k <= 4; k++) { const i = Math.round(k / 4 * (nd - 1)); xticks.push({ f: i / ((nd - 1) || 1), d: dates[i] }) }
+
+  const onMove = (e) => {
+    const r = wrapRef.current && wrapRef.current.getBoundingClientRect()
+    if (!r || !r.width) return
+    setHover(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)))
+  }
+
+  const gid = 'ic-grad-' + (lines[0].color || '').replace('#', '')
+  const svgKids = [React.createElement('defs', { key: 'defs' }, [
+    React.createElement('linearGradient', { key: 'g', id: gid, x1: 0, y1: 0, x2: 0, y2: 1 }, [
+      React.createElement('stop', { key: 'a', offset: '0', style: { stopColor: lines[0].color, stopOpacity: 0.22 } }),
+      React.createElement('stop', { key: 'b', offset: '1', style: { stopColor: lines[0].color, stopOpacity: 0 } }),
+    ]),
+  ])]
+  ticks.forEach((t, i) => svgKids.push(React.createElement('line', { key: 'g' + i, x1: 0, y1: t.y, x2: W, y2: t.y, style: { stroke: Math.abs(t.val - 100) < 1e-6 ? '#26324d' : '#16203a', strokeWidth: 1 } })))
+  lines.forEach((s2, li) => {
+    const d = path(s2.values)
+    if (s2.area) svgKids.push(React.createElement('path', { key: 'ar' + li, d: d + ' L' + W + ',' + plotH + ' L0,' + plotH + ' Z', style: { fill: 'url(#' + gid + ')', stroke: 'none' } }))
+    svgKids.push(React.createElement('path', { key: 'ln' + li, d, style: { fill: 'none', stroke: s2.color, strokeWidth: s2.area ? 2 : 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' } }))
+  })
+  const svg = React.createElement('svg', { key: 'svg', viewBox: '0 0 ' + W + ' ' + plotH, preserveAspectRatio: 'none', style: { width: '100%', height: plotH + 'px', display: 'block' } }, svgKids)
+
+  const axis = React.createElement('div', { key: 'axis', style: { position: 'relative', width: '50px', flex: '0 0 auto', height: plotH + 'px' } },
+    ticks.map((t, i) => React.createElement('span', { key: 'ax' + i, style: { position: 'absolute', right: 0, top: t.y + 'px', transform: 'translateY(-50%)', fontFamily: "'IBM Plex Mono'", fontSize: '9.5px', color: '#6b7794', whiteSpace: 'nowrap' } }, fmtPct(t.val))))
+
+  let overlay = []
+  if (hover != null) {
+    const leftPct = hover * 100
+    const rows = lines.map((s2) => { const idx = Math.max(0, Math.min(s2.values.length - 1, Math.round(hover * (s2.values.length - 1)))); return { label: s2.label, color: s2.color, val: s2.values[idx], y: Y(s2.values[idx]) } })
+    const di = Math.max(0, Math.min(nd - 1, Math.round(hover * (nd - 1))))
+    const clamped = Math.max(15, Math.min(85, leftPct))
+    overlay.push(React.createElement('div', { key: 'cross', style: { position: 'absolute', top: 0, height: plotH + 'px', left: leftPct + '%', width: '1px', background: 'rgba(154,167,194,.35)', pointerEvents: 'none' } }))
+    rows.forEach((rw, i) => overlay.push(React.createElement('div', { key: 'dot' + i, style: { position: 'absolute', left: leftPct + '%', top: rw.y + 'px', width: '7px', height: '7px', borderRadius: '50%', background: rw.color, border: '2px solid #0e1422', transform: 'translate(-50%,-50%)', pointerEvents: 'none' } })))
+    overlay.push(React.createElement('div', { key: 'tip', style: { position: 'absolute', left: clamped + '%', top: '2px', transform: 'translateX(-50%)', background: '#0a0f1a', border: '1px solid #24345a', borderRadius: '6px', padding: '6px 9px', pointerEvents: 'none', whiteSpace: 'nowrap', boxShadow: '0 4px 14px rgba(0,0,0,.45)' } }, [
+      React.createElement('div', { key: 'd', style: { fontFamily: "'IBM Plex Mono'", fontSize: '9.5px', color: '#7e8aa6', marginBottom: '4px' } }, fmtChartDate(dates && dates[di])),
+    ].concat(rows.map((rw, i) => React.createElement('div', { key: 'r' + i, style: { display: 'flex', alignItems: 'center', gap: '6px', marginTop: i ? '2px' : 0 } }, [
+      React.createElement('span', { key: 'sw', style: { width: '7px', height: '7px', borderRadius: '50%', background: rw.color, flex: '0 0 auto' } }),
+      React.createElement('span', { key: 'lb', style: { fontFamily: "'IBM Plex Sans'", fontSize: '10px', color: '#9aa7c2' } }, rw.label),
+      React.createElement('span', { key: 'vl', style: { fontFamily: "'IBM Plex Mono'", fontSize: '10px', color: '#e8edf7', marginLeft: '14px' } }, fmtPct(rw.val)),
+    ])))))
+  }
+
+  const plot = React.createElement('div', { key: 'plot', ref: wrapRef, onMouseMove: onMove, onMouseLeave: () => setHover(null), style: { position: 'relative', flex: '1 1 auto', minWidth: 0, height: plotH + 'px', cursor: 'crosshair' } }, [svg].concat(overlay))
+  const chartRow = React.createElement('div', { key: 'row', style: { display: 'flex', alignItems: 'stretch', height: plotH + 'px' } }, [plot, axis])
+  const dateRow = React.createElement('div', { key: 'dates', style: { display: 'flex', height: axisH + 'px' } }, [
+    React.createElement('div', { key: 'dx', style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } }, xticks.map((t, i) => React.createElement('span', {
+      key: 'd' + i, style: { position: 'absolute', left: (t.f * 100) + '%', top: '3px', transform: i === 0 ? 'translateX(0)' : (i === xticks.length - 1 ? 'translateX(-100%)' : 'translateX(-50%)'), fontFamily: "'IBM Plex Mono'", fontSize: '9px', color: '#5d6a85', whiteSpace: 'nowrap' },
+    }, fmtAxisDate(t.d, longSpan)))),
+    React.createElement('div', { key: 'sp', style: { width: '50px', flex: '0 0 auto' } }),
+  ])
+  return React.createElement('div', { style: { height: height + 'px' } }, [chartRow, dateRow])
 }
 
 export default class App extends React.Component {
@@ -1436,7 +1524,7 @@ export default class App extends React.Component {
                 <span style={s("font:500 10px 'IBM Plex Sans';color:#6b7794;")}>Indexed to 0% at the start of {v.secPeriod}</span>
                 <div style={s("display:flex;gap:13px;font:500 10px 'IBM Plex Sans';flex-wrap:wrap;")}>{v.secChartLegend.map((l, i) => (<span key={i} style={{ color: l.color }}>{l.mark} {l.label}</span>))}</div>
               </div>
-              <div style={s('height:168px;')}>{v.secChartEl}</div>
+              <div style={s('height:190px;')}>{v.secChartEl}</div>
             </div>
             <div style={s('display:grid;grid-template-columns:1fr 1fr;gap:11px;')}>
               {[{ t: 'Leaders · 1 week', rows: v.secTop }, { t: 'Laggards · 1 week', rows: v.secBottom }].map((col, ci) => (
@@ -1705,10 +1793,10 @@ export default class App extends React.Component {
       v.secState = ss === 'loading' ? 'loading' : ss === 'error' ? 'error' : (ss ? 'ready' : 'loading')
       if (v.secState === 'ready') {
         const pal = ['#5a93f9', '#f4a531', '#8aa0c8', '#3fb6c0']
-        const lines = []
-        if (ss.sector && ss.sector.values && ss.sector.values.length) lines.push({ values: ss.sector.values, color: a.color, area: true, width: 2 })
-        ss.benchmarks.forEach((b, i) => { if (b.values && b.values.length) lines.push({ values: b.values, color: pal[i % pal.length], width: 1.5 }) })
-        v.secChartEl = this._chart('sec' + st.sector + sper, lines, 168)
+        const chartSeries = []
+        if (ss.sector && ss.sector.values && ss.sector.values.length) chartSeries.push({ label: a.name, color: a.color, values: ss.sector.values, area: true })
+        ss.benchmarks.forEach((b, i) => { if (b.values && b.values.length) chartSeries.push({ label: b.ticker, color: pal[i % pal.length], values: b.values }) })
+        v.secChartEl = React.createElement(IndexChart, { key: 'sec' + st.sector + sper, dates: (ss.sector && ss.sector.dates) || [], series: chartSeries, height: 190 })
         v.secChartLegend = [{ mark: '●', color: a.color, label: a.name }]
           .concat(ss.benchmarks.map((b, i) => ({ mark: '┄', color: pal[i % pal.length], label: b.ticker })))
         v.secKpis = [{ label: a.name + ' · ' + sper, val: this._sign((ss.sector.ret || 0) * 100, 1) + '%', color: a.color, valColor: this._col(ss.sector.ret || 0), hero: true }]
