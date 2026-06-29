@@ -42,6 +42,20 @@ function fmtAxisDate(d, longSpan) {
   if (p.length < 3) return String(d)
   return longSpan ? MONTHS[(+p[1]) - 1] + " '" + p[0].slice(2) : MONTHS[(+p[1]) - 1] + ' ' + (+p[2])
 }
+// Catmull-Rom -> cubic Bézier: turns a list of [x,y] points into a smooth path.
+// Shared by every chart in the terminal so they all curve the same way.
+function smoothPath(pts) {
+  if (pts.length < 3) return pts.map((p, i) => (i ? 'L' : 'M') + p[0] + ',' + p[1]).join(' ')
+  const f = 0.16  // smoothing strength (≈1/6 = classic Catmull-Rom)
+  let d = 'M' + pts[0][0] + ',' + pts[0][1]
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2
+    const c1x = p1[0] + (p2[0] - p0[0]) * f, c1y = p1[1] + (p2[1] - p0[1]) * f
+    const c2x = p2[0] - (p3[0] - p1[0]) * f, c2y = p2[1] - (p3[1] - p1[1]) * f
+    d += ' C' + c1x.toFixed(2) + ',' + c1y.toFixed(2) + ' ' + c2x.toFixed(2) + ',' + c2y.toFixed(2) + ' ' + p2[0] + ',' + p2[1]
+  }
+  return d
+}
 
 // Interactive single-line price chart with a price axis and a hover readout.
 // Used on the stock page (the fund/hero charts still use App._chart).
@@ -59,7 +73,7 @@ function PriceChart({ dates, values, color, height }) {
   const X = (i) => +((i / ((n - 1) || 1)) * W).toFixed(2)
   const xPct = (i) => (i / ((n - 1) || 1)) * 100
 
-  const line = values.map((v, i) => (i ? 'L' : 'M') + X(i) + ',' + Y(v)).join(' ')
+  const line = smoothPath(values.map((v, i) => [X(i), Y(v)]))
   const area = line + ' L' + W + ',' + height + ' L0,' + height + ' Z'
   const gid = 'pc-grad-' + (color || '').replace('#', '')
 
@@ -162,7 +176,7 @@ function IndexChart({ dates, series, height }) {
   const span = (max - min) || 1
   const Y = (v) => +(plotH - padB - ((v - min) / span) * innerH).toFixed(2)
   const xAt = (i, n) => +((i / ((n - 1) || 1)) * W).toFixed(2)
-  const path = (vals) => vals.map((v, i) => (i ? 'L' : 'M') + xAt(i, vals.length) + ',' + Y(v)).join(' ')
+  const path = (vals) => smoothPath(vals.map((v, i) => [xAt(i, vals.length), Y(v)]))
 
   const TN = 4, ticks = []
   for (let k = 0; k <= TN; k++) { const val = min + (span * k) / TN; ticks.push({ val, y: Y(val) }) }
@@ -690,19 +704,6 @@ export default class App extends React.Component {
   }
 
   // ---------- charts ----------
-  // Catmull-Rom -> cubic Bézier: turns a list of [x,y] points into a smooth path.
-  _smoothPath(pts) {
-    if (pts.length < 3) return pts.map((p, i) => (i ? 'L' : 'M') + p[0] + ',' + p[1]).join(' ')
-    const f = 0.16  // smoothing strength (≈1/6 = classic Catmull-Rom)
-    let d = 'M' + pts[0][0] + ',' + pts[0][1]
-    for (let i = 0; i < pts.length - 1; i++) {
-      const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2
-      const c1x = p1[0] + (p2[0] - p0[0]) * f, c1y = p1[1] + (p2[1] - p0[1]) * f
-      const c2x = p2[0] - (p3[0] - p1[0]) * f, c2y = p2[1] - (p3[1] - p1[1]) * f
-      d += ' C' + c1x.toFixed(2) + ',' + c1y.toFixed(2) + ' ' + c2x.toFixed(2) + ',' + c2y.toFixed(2) + ' ' + p2[0] + ',' + p2[1]
-    }
-    return d
-  }
   _chart(key, lines, h) {
     const w = 900, all = []
     lines.forEach((l) => l.values.forEach((v) => all.push(v)))
@@ -715,7 +716,7 @@ export default class App extends React.Component {
     const defs = [], paths = []
     lines.forEach((l, li) => {
       const n = l.values.length; if (!n) return
-      const d = this._smoothPath(l.values.map((v, i) => [X(i, n), Y(v)]))
+      const d = smoothPath(l.values.map((v, i) => [X(i, n), Y(v)]))
       if (l.area) {
         const gid = key + '-g' + li
         defs.push(React.createElement('linearGradient', { key: 'd' + li, id: gid, x1: 0, y1: 0, x2: 0, y2: 1 }, [
