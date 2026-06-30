@@ -5,6 +5,7 @@ Serves the React frontend's data from the existing analytics layer. Run:
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
@@ -595,7 +596,8 @@ def chat(payload: dict):
 
 
 def _agent_context(data: dict) -> str:
-    """Concise live-portfolio snapshot handed to the market-analysis agent."""
+    """Concise live-portfolio snapshot handed to the market-analysis agent. The
+    full holdings ride along as a mounted file (see _agent_portfolio_json)."""
     lines = [f"UOIG endowment snapshot (as of {data.get('asOf')}):"]
     for f in data["funds"].values():
         ret = (f.get("ret") or {})
@@ -608,7 +610,28 @@ def _agent_context(data: dict) -> str:
     for h in top:
         lines.append(f"- {h['t']} · {round(h.get('w') or 0, 1)}% · {h.get('s')} "
                      f"· {round(h.get('mtd') or 0, 1)}%")
+    lines.append("")
+    lines.append("Our full live holdings (every position, weights, and per-name returns) are "
+                 "attached to this session as the file portfolio.json — read it for exact positions.")
     return "\n".join(lines)
+
+
+def _agent_portfolio_json(data: dict) -> str:
+    """Full live portfolio as JSON, mounted at /workspace/portfolio.json so the
+    agent can analyze the actual Tall Firs / Alumni positions."""
+    payload = {
+        "as_of": data.get("asOf"),
+        "funds": [{"name": f["name"], "aum_musd": f.get("aum"), "benchmark": f.get("benchShort"),
+                   "returns": f.get("ret"), "beta": f.get("beta"), "alpha_pct": f.get("alpha"),
+                   "sharpe": f.get("sharpe"), "ann_vol_pct": f.get("vol")}
+                  for f in data["funds"].values()],
+        "holdings": [{"ticker": h["t"], "name": h.get("n"), "sector": h.get("s"), "fund": h.get("fund"),
+                      "weight_pct": h.get("w"), "price": h.get("px"), "mtd_pct": h.get("mtd"),
+                      "day_pct": h.get("chg"), "market_value_usd": h.get("mv"), "beta": h.get("beta"),
+                      "pe": h.get("pe"), "div_yield_pct": h.get("dy")}
+                     for h in sorted(data["holdings"], key=lambda x: -(x.get("w") or 0))],
+    }
+    return json.dumps(payload, indent=2)
 
 
 @app.post("/api/agent/run")
@@ -622,15 +645,19 @@ def agent_run(payload: dict):
         raise HTTPException(503, "agent_not_configured")
     conn = _conn()
     try:
-        context = _agent_context(build_terminal_data(CFG, conn))
+        data = build_terminal_data(CFG, conn)
     finally:
         conn.close()
+    context = _agent_context(data)
+    attachments = [{"filename": "portfolio.json", "mount_path": "/workspace/portfolio.json",
+                    "content": _agent_portfolio_json(data)}]
     task = (payload.get("task") or "").strip() or (
-        "Give today's market analysis for our portfolio: the key macro and sector "
-        "drivers, notable moves in our holdings, and any risks or names to watch. "
-        "Be concise and specific; cite sources where you used them.")
+        "Read the attached portfolio.json file for our holdings, then give today's "
+        "market analysis for our portfolio: the key macro and sector drivers, notable "
+        "moves in our holdings, and any risks or names to watch. Be concise and "
+        "specific; cite sources where you used them.")
     try:
-        return {"reply": agent.run_agent(aid, task, context)}
+        return {"reply": agent.run_agent(aid, task, context, attachments=attachments)}
     except RuntimeError as exc:
         if str(exc) == "no_key":
             raise HTTPException(503, "Anthropic API key not configured")

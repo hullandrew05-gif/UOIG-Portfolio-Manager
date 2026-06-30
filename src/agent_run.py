@@ -9,6 +9,7 @@ hand that back to the chat. The API key resolution is shared with the chat assis
 """
 from __future__ import annotations
 
+import io
 import os
 import time
 
@@ -40,16 +41,31 @@ def _environment_id(client) -> str:
     return env.id
 
 
-def run_agent(agent_id: str, task: str, context: str = "",
+def run_agent(agent_id: str, task: str, context: str = "", attachments=None,
               title: str = "Market analysis") -> str:
     """Start a session against `agent_id`, send `context` + `task`, and return the
-    agent's collected text output. Raises RuntimeError('no_key') / ('no_agent') for
-    the configuration cases the caller maps to clean HTTP errors."""
+    agent's collected text output. `attachments` is a list of
+    {filename, content (str), mount_path} files uploaded and mounted into the
+    session workspace (e.g. the live holdings). Raises RuntimeError('no_key') /
+    ('no_agent') for the configuration cases the caller maps to clean HTTP errors."""
     if not (agent_id or "").strip():
         raise RuntimeError("no_agent")
     client = _client()
     env_id = _environment_id(client)
-    session = client.beta.sessions.create(agent=agent_id, environment_id=env_id, title=title)
+
+    resources = []
+    for att in (attachments or []):
+        data = att["content"]
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        up = client.beta.files.upload(file=(att["filename"], io.BytesIO(data), "application/json"))
+        resources.append({"type": "file", "file_id": up.id,
+                          "mount_path": att.get("mount_path") or ("/workspace/" + att["filename"])})
+
+    kwargs = {"agent": agent_id, "environment_id": env_id, "title": title}
+    if resources:
+        kwargs["resources"] = resources
+    session = client.beta.sessions.create(**kwargs)
 
     message = (context.strip() + "\n\n" + task.strip()).strip() if context else task.strip()
     parts: list[str] = []
