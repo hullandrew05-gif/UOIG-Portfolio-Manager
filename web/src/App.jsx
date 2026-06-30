@@ -1,5 +1,5 @@
 import React from 'react'
-import { getData, getSeries, getFundSeries, getSectorSeries, getStock, getPredictions, getThesis, postChat, runAgent, searchTickers, getQuote, getMe, logout, loginUrl, sendInvite, passwordLogin, requestPasswordReset, confirmPasswordReset, verifyEmail, getInvitation, acceptPassword } from './api.js'
+import { getData, getSeries, getFundSeries, getSectorSeries, getStock, getPredictions, getThesis, postChat, runAgent, getAgentRun, searchTickers, getQuote, getMe, logout, loginUrl, sendInvite, passwordLogin, requestPasswordReset, confirmPasswordReset, verifyEmail, getInvitation, acceptPassword } from './api.js'
 
 // UOIG sector taxonomy: the five groups the club uses, each rolling up one or
 // more yfinance GICS sectors. Order here is the board's column order.
@@ -782,19 +782,34 @@ export default class App extends React.Component {
     }
   }
 
-  // Trigger the Anthropic Managed Agent (market analysis) and drop its output in
-  // the chat. Runs server-side until the agent goes idle, so it can take a while.
+  // Trigger the Anthropic Managed Agent (market analysis). The run takes ~30s, so
+  // the backend kicks it off in the background and we poll for the result — no long
+  // request to time out. Output drops into the chat when ready.
   _runAgent() {
     if (this.state.agentBusy || this.state.loading) return
     this.setState((st) => ({ chatOpen: true, loading: true, agentBusy: true,
       chat: st.chat.concat([{ role: 'user', content: '▶ Run market analysis' }]) }))
+    const finish = (content) => this.setState((st) => ({ loading: false, agentBusy: false,
+      chat: st.chat.concat([{ role: 'assistant', content }]) }))
     runAgent()
-      .then((res) => this.setState((st) => ({ loading: false, agentBusy: false,
-        chat: st.chat.concat([{ role: 'assistant', content: res.reply || 'The agent returned no output.' }]) })))
-      .catch((e) => this.setState((st) => ({ loading: false, agentBusy: false,
-        chat: st.chat.concat([{ role: 'assistant', content: String(e).includes('503')
-          ? '⚠ The market-analysis agent isn’t configured on the backend yet.'
-          : '⚠ The agent run failed or timed out. Try again in a moment.' }]) })))
+      .then((res) => {
+        if (!res || !res.job_id) { finish('⚠ Could not start the agent run.'); return }
+        let tries = 0
+        const poll = () => {
+          if (++tries > 150) { finish('⚠ The agent run timed out.'); return }  // ~6 min cap
+          getAgentRun(res.job_id)
+            .then((j) => {
+              if (j.status === 'done') finish(j.reply || 'The agent returned no output.')
+              else if (j.status === 'error') finish('⚠ The agent run failed: ' + (j.error || 'unknown error'))
+              else setTimeout(poll, 2500)
+            })
+            .catch(() => finish('⚠ Lost contact with the agent run.'))
+        }
+        setTimeout(poll, 2500)
+      })
+      .catch((e) => finish(String(e).includes('503')
+        ? '⚠ The market-analysis agent isn’t configured on the backend yet.'
+        : '⚠ Could not start the agent run.'))
   }
 
   _rowVM(h, from) {

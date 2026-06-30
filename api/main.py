@@ -9,6 +9,8 @@ import json
 import logging
 import os
 import sys
+import threading
+import uuid
 import warnings
 from pathlib import Path
 
@@ -634,11 +636,17 @@ def _agent_portfolio_json(data: dict) -> str:
     return json.dumps(payload, indent=2)
 
 
+# In-process store for async agent runs. A run takes ~30s, which is too long for
+# one blocking HTTP request (proxies/gateways cut it off), so the button kicks off
+# a background thread and the frontend polls the status endpoint below.
+_AGENT_JOBS: dict[str, dict] = {}
+
+
 @app.post("/api/agent/run")
 def agent_run(payload: dict):
-    """Trigger the user's Anthropic Managed Agent (market analysis) on demand and
-    return its output for the Ask-Claude dock. Agent id is `agent_id` in config.yaml
-    (an ANTHROPIC_AGENT_ID env var overrides it)."""
+    """Start a Managed Agent (market analysis) run in the background and return a
+    job id immediately. Poll GET /api/agent/run/{job_id} for the result. Agent id is
+    `agent_id` in config.yaml (an ANTHROPIC_AGENT_ID env var overrides it)."""
     from src import agent_run as agent
     aid = (os.environ.get("ANTHROPIC_AGENT_ID") or CFG.get("agent_id") or "").strip()
     if not aid:
@@ -656,16 +664,32 @@ def agent_run(payload: dict):
         "market analysis for our portfolio: the key macro and sector drivers, notable "
         "moves in our holdings, and any risks or names to watch. Be concise and "
         "specific; cite sources where you used them.")
-    try:
-        return {"reply": agent.run_agent(aid, task, context, attachments=attachments)}
-    except RuntimeError as exc:
-        if str(exc) == "no_key":
-            raise HTTPException(503, "Anthropic API key not configured")
-        if str(exc) == "no_agent":
-            raise HTTPException(503, "agent_not_configured")
-        raise HTTPException(502, f"agent run failed: {exc}")
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(502, f"agent run failed: {exc}")
+
+    job_id = uuid.uuid4().hex
+    _AGENT_JOBS[job_id] = {"status": "running", "reply": None, "error": None}
+
+    def _worker():
+        try:
+            reply = agent.run_agent(aid, task, context, attachments=attachments)
+            _AGENT_JOBS[job_id] = {"status": "done", "reply": reply, "error": None}
+        except Exception as exc:  # noqa: BLE001
+            log.exception("agent run failed")
+            _AGENT_JOBS[job_id] = {"status": "error", "reply": None, "error": str(exc)}
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return {"job_id": job_id, "status": "running"}
+
+
+@app.get("/api/agent/run/{job_id}")
+def agent_run_status(job_id: str):
+    """Poll an agent run. While running, returns {status: 'running'}; on completion
+    returns {status: 'done', reply} or {status: 'error', error} and drops the job."""
+    job = _AGENT_JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(404, "unknown or expired job")
+    if job["status"] != "running":
+        _AGENT_JOBS.pop(job_id, None)  # one-shot: free the slot once delivered
+    return job
 
 
 # CORS is added LAST so it's the outermost middleware: it answers OPTIONS
