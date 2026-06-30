@@ -43,6 +43,11 @@ def api_key() -> str | None:
 HISTORY_LIMIT = 8
 # Max model round-trips per question when it reads repo files (bounds tool-use cost).
 MAX_TOOL_TURNS = 6
+# Anthropic-hosted web search (runs server-side; results stream back in the same
+# response). Basic variant `web_search_20250305` is the one Haiku 4.5 supports —
+# the `_20260209` dynamic-filtering variant needs Opus 4.6+/Sonnet 4.6. `max_uses`
+# caps searches per question to bound cost.
+WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search", "max_uses": 4}
 
 
 def answer(messages: list[dict], system: str, max_tokens: int = 800) -> str:
@@ -67,7 +72,7 @@ def answer(messages: list[dict], system: str, max_tokens: int = 800) -> str:
         return "Ask me anything about the portfolio."
 
     from src import repo_tools, data_tools
-    tools = repo_tools.TOOLS + data_tools.TOOLS
+    tools = repo_tools.TOOLS + data_tools.TOOLS + [WEB_SEARCH_TOOL]
 
     def _run(name, inp):
         return repo_tools.run_tool(name, inp) or data_tools.run_tool(name, inp) or (f"Unknown tool: {name}", True)
@@ -82,6 +87,11 @@ def answer(messages: list[dict], system: str, max_tokens: int = 800) -> str:
         )
         tool_uses = [b for b in resp.content if b.type == "tool_use"]
         if not tool_uses:
+            # Server tools (web search) run inline; a long search can yield
+            # stop_reason 'pause_turn' — feed the partial turn back to resume.
+            if getattr(resp, "stop_reason", None) == "pause_turn":
+                msgs.append({"role": "assistant", "content": resp.content})
+                continue
             return _text(resp)
         msgs.append({"role": "assistant", "content": resp.content})
         results = []

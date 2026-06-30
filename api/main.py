@@ -1,4 +1,4 @@
-"""FastAPI backend for the UOIG Endowment Terminal.
+"""FastAPI backend for the UOIG Endowment Terminal
 
 Serves the React frontend's data from the existing analytics layer. Run:
     python -m uvicorn api.main:app --reload --port 8000
@@ -551,6 +551,9 @@ def _chat_system(conn, context: str) -> str:
         "financials, earnings, news, analyst research), get_predictions (Kalshi market-implied "
         "odds), and get_thesis (the team's written pitch). Pull these on demand for a ticker; "
         "read only what the question needs.",
+        "You can also search the web (web_search) for current information the portfolio data "
+        "doesn't cover — recent news, macro events, analyst commentary, or anything time-sensitive. "
+        "Use it when a question needs up-to-date external context, and cite the sources you used.",
         "",
         f"PORTFOLIO SNAPSHOT (as of {data.get('asOf')}):",
     ]
