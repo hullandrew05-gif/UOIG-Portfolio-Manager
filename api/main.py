@@ -577,7 +577,7 @@ def _chat_system(conn, context: str) -> str:
 
 @app.post("/api/chat")
 def chat(payload: dict):
-    """Live Ask-Claude turn via the Anthropic API (claude-opus-4-8)."""
+    """Live Ask-Claude turn via the Anthropic API (claude-haiku-4-5)."""
     messages = payload.get("messages") or []
     context = str(payload.get("context") or "")
     if not llm_key():

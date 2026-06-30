@@ -1,6 +1,6 @@
 """Anthropic-backed research co-pilot for the terminal's Ask-Claude chat.
 
-A thin wrapper over the Messages API (model claude-opus-4-8). The API key is read
+A thin wrapper over the Messages API (model claude-haiku-4-5). The API key is read
 from the ANTHROPIC_API_KEY environment variable, falling back to a git-ignored
 `anthropic.key.txt` at the repo root (same pattern as the Kalshi key). The system
 prompt — built by the caller — grounds answers in the live portfolio.

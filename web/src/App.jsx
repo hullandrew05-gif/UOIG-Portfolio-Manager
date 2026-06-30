@@ -1030,9 +1030,6 @@ export default class App extends React.Component {
             </div>
             <div style={s('padding:11px 13px;border-top:1px solid #241f3e;flex:0 0 auto;')}>
               <div onClick={() => this._runAgent()} style={{ ...s("display:flex;align-items:center;justify-content:center;gap:7px;margin-bottom:10px;padding:8px;border-radius:8px;font:600 10.5px 'IBM Plex Sans';letter-spacing:.03em;cursor:pointer;"), background: this.state.agentBusy ? '#1a1533' : 'linear-gradient(135deg,#5a4fd6,#3a31a8)', color: this.state.agentBusy ? '#7a6fb5' : '#fff', cursor: this.state.agentBusy ? 'default' : 'pointer' }}><span style={s('font-size:11px;')}>▶</span>{this.state.agentBusy ? 'Running market analysis…' : 'Run market analysis'}</div>
-              <div style={s('display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;')}>
-                {v.suggestions.map((sg, i) => (<span key={i} onClick={sg.on} style={s('padding:5px 10px;border:1px solid #2c2550;border-radius:20px;font-size:9.5px;color:#a99fd0;background:#120f24;cursor:pointer;')}>{sg.text}</span>))}
-              </div>
               <div style={s('display:flex;align-items:flex-end;gap:8px;background:#0a0f1a;border:1px solid #2c2550;border-radius:10px;padding:8px 10px;')}>
                 <input value={v.input} onChange={(e) => this.setState({ input: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this._send() } }} placeholder={'Ask about ' + v.ctxShort + '…'} style={s("flex:1;background:transparent;border:none;outline:none;color:#e8edf7;font:400 11.5px 'IBM Plex Sans';")} />
                 <span onClick={() => this._send()} style={{ ...s('width:27px;height:27px;border-radius:7px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;cursor:pointer;flex:0 0 auto;'), background: v.sendBg }}>↑</span>
@@ -1838,12 +1835,11 @@ export default class App extends React.Component {
     }
 
     // claude dock
-    let ctxLabel = 'Portfolio', ctxShort = 'the portfolio', sugg = []
-    if (st.view === 'stock' && v.stk) { const h = v.stk; ctxLabel = h.t + ' · ' + (h.n || '').slice(0, 16); ctxShort = h.t; sugg = ['What’s driving ' + h.t + ' today?', 'Summarize the bull vs bear case', 'What are the key risks to watch?'] }
-    else if (st.view === 'sector' && agg[st.sector]) { ctxLabel = 'Sector · ' + st.sector; ctxShort = st.sector; sugg = ['What’s our outlook on ' + st.sector + '?', 'Are we over- or under-weight here?', 'Which holding has the most upside?'] }
-    else { const lbl = fk === 'all' ? 'Combined' : F[fk].name; ctxLabel = lbl + ' · ' + per; ctxShort = 'this fund'; sugg = ['Why are we beating the benchmark?', 'Compare the two funds’ risk', 'Where is our biggest concentration?'] }
+    let ctxLabel = 'Portfolio', ctxShort = 'the portfolio'
+    if (st.view === 'stock' && v.stk) { const h = v.stk; ctxLabel = h.t + ' · ' + (h.n || '').slice(0, 16); ctxShort = h.t }
+    else if (st.view === 'sector' && agg[st.sector]) { ctxLabel = 'Sector · ' + st.sector; ctxShort = st.sector }
+    else { const lbl = fk === 'all' ? 'Combined' : F[fk].name; ctxLabel = lbl + ' · ' + per; ctxShort = 'this fund' }
     v.ctxLabel = ctxLabel; v.ctxShort = ctxShort
-    v.suggestions = sugg.map((t) => ({ text: t, on: () => this._send(t) }))
     v.chatEmpty = st.chat.length === 0 && !st.loading
     v.chatMsgs = st.chat.map((m, i) => { const user = m.role === 'user'; return { body: user ? m.content : this._fmt(m.content), align: user ? 'flex-end' : 'flex-start', maxw: user ? '86%' : '95%', bg: user ? '#13203a' : '#15112c', border: user ? '#13203a' : '#2a2350', radius: user ? '11px 11px 3px 11px' : '11px 11px 11px 3px', color: user ? '#cdd6e8' : '#d7d2f0', key: i } })
     v.loading = st.loading; v.input = st.input || ''
