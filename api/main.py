@@ -594,6 +594,51 @@ def chat(payload: dict):
         raise HTTPException(502, f"chat failed: {exc}")
 
 
+def _agent_context(data: dict) -> str:
+    """Concise live-portfolio snapshot handed to the market-analysis agent."""
+    lines = [f"UOIG endowment snapshot (as of {data.get('asOf')}):"]
+    for f in data["funds"].values():
+        ret = (f.get("ret") or {})
+        ytd = ret.get("YTD")
+        lines.append(f"- {f['name']}: ${f.get('aum')}M AUM, YTD "
+                     f"{round(ytd * 100, 1) if ytd is not None else '—'}%, "
+                     f"beta {f.get('beta')} vs {f.get('benchShort')}")
+    top = sorted(data["holdings"], key=lambda h: -(h.get("w") or 0))[:12]
+    lines.append("Top holdings (ticker · weight% · sector · MTD%):")
+    for h in top:
+        lines.append(f"- {h['t']} · {round(h.get('w') or 0, 1)}% · {h.get('s')} "
+                     f"· {round(h.get('mtd') or 0, 1)}%")
+    return "\n".join(lines)
+
+
+@app.post("/api/agent/run")
+def agent_run(payload: dict):
+    """Trigger the user's Anthropic Managed Agent (market analysis) on demand and
+    return its output for the Ask-Claude dock. Agent id comes from ANTHROPIC_AGENT_ID."""
+    from src import agent_run as agent
+    if not agent.agent_id():
+        raise HTTPException(503, "agent_not_configured")
+    conn = _conn()
+    try:
+        context = _agent_context(build_terminal_data(CFG, conn))
+    finally:
+        conn.close()
+    task = (payload.get("task") or "").strip() or (
+        "Give today's market analysis for our portfolio: the key macro and sector "
+        "drivers, notable moves in our holdings, and any risks or names to watch. "
+        "Be concise and specific; cite sources where you used them.")
+    try:
+        return {"reply": agent.run_agent(task, context)}
+    except RuntimeError as exc:
+        if str(exc) == "no_key":
+            raise HTTPException(503, "Anthropic API key not configured")
+        if str(exc) == "no_agent":
+            raise HTTPException(503, "agent_not_configured")
+        raise HTTPException(502, f"agent run failed: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"agent run failed: {exc}")
+
+
 # CORS is added LAST so it's the outermost middleware: it answers OPTIONS
 # preflights before the auth gate and attaches CORS headers to every response
 # (including the gate's 401s and any error), so cross-origin failures surface as

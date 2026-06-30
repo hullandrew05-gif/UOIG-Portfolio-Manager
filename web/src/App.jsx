@@ -1,5 +1,5 @@
 import React from 'react'
-import { getData, getSeries, getFundSeries, getSectorSeries, getStock, getPredictions, getThesis, postChat, searchTickers, getQuote, getMe, logout, loginUrl, sendInvite, passwordLogin, requestPasswordReset, confirmPasswordReset, verifyEmail, getInvitation, acceptPassword } from './api.js'
+import { getData, getSeries, getFundSeries, getSectorSeries, getStock, getPredictions, getThesis, postChat, runAgent, searchTickers, getQuote, getMe, logout, loginUrl, sendInvite, passwordLogin, requestPasswordReset, confirmPasswordReset, verifyEmail, getInvitation, acceptPassword } from './api.js'
 
 // UOIG sector taxonomy: the five groups the club uses, each rolling up one or
 // more yfinance GICS sectors. Order here is the board's column order.
@@ -261,7 +261,7 @@ export default class App extends React.Component {
       ticker: null, sector: null, prevView: 'dashboard',
       stkTab: 'overview', chatOpen: false,
       sortKey: 'w', sortDir: 'desc', query: '',
-      chat: [], input: '', loading: false,
+      chat: [], input: '', loading: false, agentBusy: false,
       series: {},  // cache: key -> {dates, values/close, ...}
       sectorSeries: {},  // cache: `${group}:${period}` -> {sector, benchmarks, movers} | 'loading' | 'error'
       sectorPeriod: '1M',  // sector comparison chart window (independent of the global period)
@@ -782,6 +782,21 @@ export default class App extends React.Component {
     }
   }
 
+  // Trigger the Anthropic Managed Agent (market analysis) and drop its output in
+  // the chat. Runs server-side until the agent goes idle, so it can take a while.
+  _runAgent() {
+    if (this.state.agentBusy || this.state.loading) return
+    this.setState((st) => ({ chatOpen: true, loading: true, agentBusy: true,
+      chat: st.chat.concat([{ role: 'user', content: '▶ Run market analysis' }]) }))
+    runAgent()
+      .then((res) => this.setState((st) => ({ loading: false, agentBusy: false,
+        chat: st.chat.concat([{ role: 'assistant', content: res.reply || 'The agent returned no output.' }]) })))
+      .catch((e) => this.setState((st) => ({ loading: false, agentBusy: false,
+        chat: st.chat.concat([{ role: 'assistant', content: String(e).includes('503')
+          ? '⚠ The market-analysis agent isn’t configured. Set the ANTHROPIC_AGENT_ID environment variable on the backend and restart.'
+          : '⚠ The agent run failed or timed out. Try again in a moment.' }]) })))
+  }
+
   _rowVM(h, from) {
     const ctb = (h.w / 100) * h.mtd
     const fund = this.funds[h.fund] || {}
@@ -1014,6 +1029,7 @@ export default class App extends React.Component {
               )}
             </div>
             <div style={s('padding:11px 13px;border-top:1px solid #241f3e;flex:0 0 auto;')}>
+              <div onClick={() => this._runAgent()} style={{ ...s("display:flex;align-items:center;justify-content:center;gap:7px;margin-bottom:10px;padding:8px;border-radius:8px;font:600 10.5px 'IBM Plex Sans';letter-spacing:.03em;cursor:pointer;"), background: this.state.agentBusy ? '#1a1533' : 'linear-gradient(135deg,#5a4fd6,#3a31a8)', color: this.state.agentBusy ? '#7a6fb5' : '#fff', cursor: this.state.agentBusy ? 'default' : 'pointer' }}><span style={s('font-size:11px;')}>▶</span>{this.state.agentBusy ? 'Running market analysis…' : 'Run market analysis'}</div>
               <div style={s('display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;')}>
                 {v.suggestions.map((sg, i) => (<span key={i} onClick={sg.on} style={s('padding:5px 10px;border:1px solid #2c2550;border-radius:20px;font-size:9.5px;color:#a99fd0;background:#120f24;cursor:pointer;')}>{sg.text}</span>))}
               </div>

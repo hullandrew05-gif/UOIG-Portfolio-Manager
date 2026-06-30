@@ -27,6 +27,7 @@ export const getQuote = (ticker) => get(`/api/quote/${encodeURIComponent(ticker)
 export const getPredictions = (ticker) => get(`/api/predictions/${encodeURIComponent(ticker)}`)
 export const getThesis = (ticker) => get(`/api/thesis/${encodeURIComponent(ticker)}`)
 export const postChat = (messages, context) => post('/api/chat', { messages, context })
+export const runAgent = (task) => post('/api/agent/run', { task })
 
 // ---- auth (WorkOS) ----
 // The login redirect is a full navigation (Google consent can't be fetched).
