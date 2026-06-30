@@ -793,7 +793,7 @@ export default class App extends React.Component {
         chat: st.chat.concat([{ role: 'assistant', content: res.reply || 'The agent returned no output.' }]) })))
       .catch((e) => this.setState((st) => ({ loading: false, agentBusy: false,
         chat: st.chat.concat([{ role: 'assistant', content: String(e).includes('503')
-          ? '⚠ The market-analysis agent isn’t configured. Set the ANTHROPIC_AGENT_ID environment variable on the backend and restart.'
+          ? '⚠ The market-analysis agent isn’t configured on the backend yet.'
           : '⚠ The agent run failed or timed out. Try again in a moment.' }]) })))
   }
 

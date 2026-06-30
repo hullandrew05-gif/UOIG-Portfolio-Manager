@@ -14,18 +14,11 @@ import time
 
 from src.assistant import api_key
 
-AGENT_ENV_VAR = "ANTHROPIC_AGENT_ID"
 # A cloud environment (the per-session container host) is created once and reused.
 # Pre-seed from ANTHROPIC_ENV_ID if set, else create lazily and cache in-process.
 _ENV_CACHE = {"id": (os.environ.get("ANTHROPIC_ENV_ID") or "").strip() or None}
 # Hard wall-clock cap for one run (the SDK stream timeout is per-chunk, not total).
 RUN_TIMEOUT_S = 300
-
-
-def agent_id() -> str | None:
-    """The configured Managed Agent id (ANTHROPIC_AGENT_ID), or None if unset."""
-    v = os.environ.get(AGENT_ENV_VAR)
-    return v.strip() if v and v.strip() else None
 
 
 def _client():
@@ -47,16 +40,16 @@ def _environment_id(client) -> str:
     return env.id
 
 
-def run_agent(task: str, context: str = "", title: str = "Market analysis") -> str:
-    """Start a session against the configured agent, send `context` + `task`, and
-    return the agent's collected text output. Raises RuntimeError('no_key') /
-    ('no_agent') for the configuration cases the caller maps to clean HTTP errors."""
-    aid = agent_id()
-    if not aid:
+def run_agent(agent_id: str, task: str, context: str = "",
+              title: str = "Market analysis") -> str:
+    """Start a session against `agent_id`, send `context` + `task`, and return the
+    agent's collected text output. Raises RuntimeError('no_key') / ('no_agent') for
+    the configuration cases the caller maps to clean HTTP errors."""
+    if not (agent_id or "").strip():
         raise RuntimeError("no_agent")
     client = _client()
     env_id = _environment_id(client)
-    session = client.beta.sessions.create(agent=aid, environment_id=env_id, title=title)
+    session = client.beta.sessions.create(agent=agent_id, environment_id=env_id, title=title)
 
     message = (context.strip() + "\n\n" + task.strip()).strip() if context else task.strip()
     parts: list[str] = []

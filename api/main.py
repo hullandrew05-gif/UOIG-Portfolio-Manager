@@ -614,9 +614,11 @@ def _agent_context(data: dict) -> str:
 @app.post("/api/agent/run")
 def agent_run(payload: dict):
     """Trigger the user's Anthropic Managed Agent (market analysis) on demand and
-    return its output for the Ask-Claude dock. Agent id comes from ANTHROPIC_AGENT_ID."""
+    return its output for the Ask-Claude dock. Agent id is `agent_id` in config.yaml
+    (an ANTHROPIC_AGENT_ID env var overrides it)."""
     from src import agent_run as agent
-    if not agent.agent_id():
+    aid = (os.environ.get("ANTHROPIC_AGENT_ID") or CFG.get("agent_id") or "").strip()
+    if not aid:
         raise HTTPException(503, "agent_not_configured")
     conn = _conn()
     try:
@@ -628,7 +630,7 @@ def agent_run(payload: dict):
         "drivers, notable moves in our holdings, and any risks or names to watch. "
         "Be concise and specific; cite sources where you used them.")
     try:
-        return {"reply": agent.run_agent(task, context)}
+        return {"reply": agent.run_agent(aid, task, context)}
     except RuntimeError as exc:
         if str(exc) == "no_key":
             raise HTTPException(503, "Anthropic API key not configured")

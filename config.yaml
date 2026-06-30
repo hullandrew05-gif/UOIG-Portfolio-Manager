@@ -15,6 +15,11 @@ funds:
 market_data:
   provider: "yfinance"        # swappable adapter (Phase 1): yfinance | tiingo | fmp
 
+# Anthropic Managed Agent triggered by the "Run market analysis" button in the
+# Ask Claude dock. Created once in the Anthropic console; we reference it by id and
+# start a fresh session per run. An ANTHROPIC_AGENT_ID env var overrides this.
+agent_id: "agent_01RMzDAMLFimcymdi9AcYeHt"
+
 # UOIG sector groups -> the GICS sectors they roll up, plus the iShares sector
 # ETFs the sector page tracks them against. Benchmark ETFs are pulled into the
 # price store by the nightly refresh (same path as the fund benchmarks), so the
