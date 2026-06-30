@@ -40,7 +40,7 @@ from workos._errors import (AuthenticationError, BadRequestError,  # noqa: E402
 from src.analytics.pnl import load_positions  # noqa: E402
 from src.ingest.research import stock_research  # noqa: E402
 from src.ingest.lookup import (search_symbols, quote_overview,  # noqa: E402
-                               live_series)
+                               live_series, institutional_holders)
 from src.ingest.predictions import stock_predictions  # noqa: E402
 from src.ingest.thesis import stock_thesis  # noqa: E402
 from src.assistant import answer as llm_answer, api_key as llm_key  # noqa: E402
@@ -424,6 +424,16 @@ def quote(ticker: str):
     if ov is None:
         raise HTTPException(404, f"no equity quote for {ticker}")
     return ov
+
+
+@app.get("/api/holders/{ticker}")
+def holders(ticker: str):
+    """Top institutional shareholders (13F) for any equity, for the stock page
+    overview. Returns an empty list when Yahoo has no holder data."""
+    try:
+        return {"ticker": ticker.upper(), "holders": institutional_holders(ticker)}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"holders fetch failed: {exc}")
 
 
 @app.get("/api/fund-series/{fund}")

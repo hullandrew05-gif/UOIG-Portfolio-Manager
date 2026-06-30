@@ -23,6 +23,7 @@ from src.ingest.providers import to_yf
 _SEARCH_CACHE: dict[str, tuple[float, list]] = {}
 _QUOTE_CACHE: dict[str, tuple[float, dict]] = {}
 _SERIES_CACHE: dict[str, tuple[float, dict]] = {}
+_HOLDERS_CACHE: dict[str, tuple[float, list]] = {}
 _TTL = 300  # seconds
 
 # yfinance history() period / interval per terminal period button.
@@ -108,6 +109,7 @@ def quote_overview(ticker: str) -> dict | None:
     mc = _num(info.get("marketCap"))
     pe = _num(info.get("forwardPE")) or _num(info.get("trailingPE"))
     pb = _num(info.get("priceToBook"))
+    ev_ebitda = _num(info.get("enterpriseToEbitda"))
     beta = _num(info.get("beta"))
 
     # Dividend yield -> percent. yfinance has used both fractions and percents;
@@ -133,6 +135,7 @@ def quote_overview(ticker: str) -> dict | None:
         "mc": round(mc / 1e9, 2) if mc is not None else None,  # billions
         "pe": round(pe, 2) if pe is not None else None,
         "pb": round(pb, 2) if pb is not None else None,
+        "evEbitda": round(ev_ebitda, 2) if ev_ebitda is not None else None,
         "dy": round(dy, 2) if dy is not None else None,
         "beta": round(beta, 2) if beta is not None else None,
         "lo": round(lo, 2) if lo is not None else None,
@@ -143,6 +146,59 @@ def quote_overview(ticker: str) -> dict | None:
     }
     _QUOTE_CACHE[t] = (now, payload)
     return payload
+
+
+# ---------- institutional holders ----------
+def institutional_holders(ticker: str, limit: int = 5) -> list[dict]:
+    """Top institutional shareholders from yfinance's institutional_holders
+    endpoint. Returns up to `limit` rows [{holder, pct, shares, value}], largest
+    by shares first. Empty list when Yahoo has no 13F data for the symbol."""
+    t = ticker.upper()
+    key = f"{t}|{limit}"
+    now = time.time()
+    hit = _HOLDERS_CACHE.get(key)
+    if hit and (now - hit[0]) < _TTL:
+        return hit[1]
+
+    try:
+        df = yf.Ticker(to_yf(t)).institutional_holders
+    except Exception:  # noqa: BLE001 — best-effort
+        df = None
+
+    out: list[dict] = []
+    if df is not None and not df.empty:
+        # yfinance has shipped a few column spellings; resolve each defensively.
+        cols = {str(c).lower(): c for c in df.columns}
+
+        def pick(*names):
+            for n in names:
+                if n in cols:
+                    return cols[n]
+            return None
+
+        c_holder = pick("holder")
+        c_pct = pick("pctheld", "% out")
+        c_shares = pick("shares")
+        c_value = pick("value")
+
+        rows = df.sort_values(c_shares, ascending=False) if c_shares else df
+        for _, r in rows.head(limit).iterrows():
+            pct = _num(r.get(c_pct)) if c_pct else None
+            # pctHeld comes as a fraction (0.083); legacy "% Out" already a percent.
+            if pct is not None and c_pct and str(c_pct).lower() == "pctheld":
+                pct *= 100
+            shares = _num(r.get(c_shares)) if c_shares else None
+            value = _num(r.get(c_value)) if c_value else None
+            holder = r.get(c_holder) if c_holder else None
+            out.append({
+                "holder": str(holder) if holder is not None else "—",
+                "pct": round(pct, 2) if pct is not None else None,
+                "shares": int(shares) if shares is not None else None,
+                "value": round(value / 1e6, 1) if value is not None else None,  # $M
+            })
+
+    _HOLDERS_CACHE[key] = (now, out)
+    return out
 
 
 # ---------- live price series ----------

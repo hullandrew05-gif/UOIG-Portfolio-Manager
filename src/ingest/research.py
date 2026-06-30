@@ -173,7 +173,34 @@ def _financials(tk):
         cap_bits.append(f"Revenue {_pct(rev_yoy, 0)} YoY to {_money(rev[latest])}")
     if margin is not None:
         cap_bits.append(f"net margin {margin:.0f}%")
-    financials = {"bars": bars, "rows": rows, "caption": " · ".join(cap_bits)}
+    # Full last-4-quarters income statement (line items x quarters) for the
+    # statement-grid box on the Financials tab. Oldest..newest to match the bars.
+    qcols = list(reversed(cols[:4]))
+    stmt_defs = [
+        ("Revenue", "top", 1e9, ("Total Revenue", "Operating Revenue")),
+        ("Cost of revenue", "exp", 1e9, ("Cost Of Revenue",)),
+        ("Gross profit", "sub", 1e9, ("Gross Profit",)),
+        ("Operating expenses", "exp", 1e9, ("Operating Expense",)),
+        ("Operating income", "sub", 1e9, ("Operating Income", "Total Operating Income As Reported")),
+        ("Pretax income", "line", 1e9, ("Pretax Income",)),
+        ("Net income", "net", 1e9, ("Net Income", "Net Income Common Stockholders")),
+        ("Diluted EPS", "eps", 1.0, ("Diluted EPS", "Basic EPS")),
+    ]
+    stmt_rows = []
+    for label, kind, scale, names in stmt_defs:
+        ser = _row(inc, *names)
+        if ser is None:
+            continue
+        vals = [(_num(ser[c]) / scale) if _num(ser[c]) is not None else None for c in qcols]
+        if all(v is None for v in vals):
+            continue
+        prec = 2 if kind == "eps" else 3
+        stmt_rows.append({"label": label, "kind": kind,
+                          "vals": [round(v, prec) if v is not None else None for v in vals]})
+    statement = {"quarters": [_qlabel(c) for c in qcols], "rows": stmt_rows} if stmt_rows else None
+
+    financials = {"bars": bars, "rows": rows, "caption": " · ".join(cap_bits),
+                  "statement": statement}
 
     # Reported EPS per quarter (newest..oldest, up to 4) from the income statement.
     # Lets _earnings degrade gracefully when tk.earnings_dates is unavailable —

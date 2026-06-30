@@ -24,6 +24,7 @@ export const getSectorSeries = (group, period = '1M') =>
 export const getStock = (ticker) => get(`/api/stock/${encodeURIComponent(ticker)}`)
 export const searchTickers = (q) => get(`/api/search?q=${encodeURIComponent(q)}`)
 export const getQuote = (ticker) => get(`/api/quote/${encodeURIComponent(ticker)}`)
+export const getHolders = (ticker) => get(`/api/holders/${encodeURIComponent(ticker)}`)
 export const getPredictions = (ticker) => get(`/api/predictions/${encodeURIComponent(ticker)}`)
 export const getThesis = (ticker) => get(`/api/thesis/${encodeURIComponent(ticker)}`)
 export const postChat = (messages, context) => post('/api/chat', { messages, context })

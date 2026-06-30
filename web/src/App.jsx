@@ -1,5 +1,5 @@
 import React from 'react'
-import { getData, getSeries, getFundSeries, getSectorSeries, getStock, getPredictions, getThesis, postChat, runAgent, getAgentRun, searchTickers, getQuote, getMe, logout, loginUrl, sendInvite, passwordLogin, requestPasswordReset, confirmPasswordReset, verifyEmail, getInvitation, acceptPassword } from './api.js'
+import { getData, getSeries, getFundSeries, getSectorSeries, getStock, getPredictions, getThesis, postChat, runAgent, getAgentRun, searchTickers, getQuote, getHolders, getMe, logout, loginUrl, sendInvite, passwordLogin, requestPasswordReset, confirmPasswordReset, verifyEmail, getInvitation, acceptPassword } from './api.js'
 
 // UOIG sector taxonomy: the five groups the club uses, each rolling up one or
 // more yfinance GICS sectors. Order here is the board's column order.
@@ -269,6 +269,7 @@ export default class App extends React.Component {
       predictions: {},  // cache: ticker -> {cards} | 'loading' | 'error'
       theses: {},  // cache: ticker -> {thesis} | 'loading' | 'error'
       quotes: {},  // cache: ticker -> overview {t,n,s,px,...} | 'loading' | 'error' (off-portfolio names)
+      holders: {},  // cache: ticker -> [{holder,pct,shares,value}] | 'loading' | 'error' (top institutional)
       searchQ: '', searchResults: [], searchOpen: false, searchActive: -1,
     }
     this._searchSeq = 0
@@ -479,6 +480,8 @@ export default class App extends React.Component {
         prev.period !== this.state.period || prev.ticker !== this.state.ticker) this._ensureSeries()
     if (prev.stkTab !== this.state.stkTab || prev.view !== this.state.view ||
         prev.ticker !== this.state.ticker) { this._ensurePredictions(); this._ensureThesis() }
+    if (this.state.view === 'stock' &&
+        (prev.view !== 'stock' || prev.ticker !== this.state.ticker)) this._ensureHolders()
     if (this.state.view === 'sector' &&
         (prev.view !== 'sector' || prev.sector !== this.state.sector ||
          prev.sectorPeriod !== this.state.sectorPeriod)) this._ensureSectorSeries()
@@ -692,6 +695,16 @@ export default class App extends React.Component {
     getQuote(tk)
       .then((res) => this.setState((st) => ({ quotes: { ...st.quotes, [tk]: res } })))
       .catch(() => this.setState((st) => ({ quotes: { ...st.quotes, [tk]: 'error' } })))
+  }
+
+  // Top institutional shareholders (yfinance 13F) for the stock overview.
+  _ensureHolders(t) {
+    const tk = t || this.state.ticker
+    if (!tk || this.state.holders[tk]) return
+    this.setState((st) => ({ holders: { ...st.holders, [tk]: 'loading' } }))
+    getHolders(tk)
+      .then((res) => this.setState((st) => ({ holders: { ...st.holders, [tk]: res.holders || [] } })))
+      .catch(() => this.setState((st) => ({ holders: { ...st.holders, [tk]: 'error' } })))
   }
 
   _ensureThesis() {
@@ -1242,7 +1255,7 @@ export default class App extends React.Component {
 
   _renderFinancials(fin) {
     const maxRev = Math.max.apply(null, fin.bars.map((b) => b.revenue || 0).concat([1]))
-    return this._card('Financials', 'quarterly_income_stmt', (
+    const top = this._card('Financials', 'quarterly_income_stmt', (
       <div style={s('display:grid;grid-template-columns:minmax(0,1fr) 430px;gap:22px;')}>
         <div>
           <div style={s("display:flex;gap:15px;font:500 10px 'IBM Plex Sans';margin-bottom:12px;")}><span style={s('color:#5a93f9;')}>■ Revenue</span><span style={s('color:#21d07a;')}>■ Net income</span></div>
@@ -1267,6 +1280,44 @@ export default class App extends React.Component {
             <div key={i} style={s('display:grid;grid-template-columns:1fr 72px 72px 60px;gap:6px;padding:8px 0;border-bottom:1px solid #131c2f;font-size:11px;')}><span style={s('color:#9aa7c2;')}>{r.label}</span><span style={s("font-family:'IBM Plex Mono';text-align:right;color:#e8edf7;")}>{r.cur}</span><span style={s("font-family:'IBM Plex Mono';text-align:right;color:#9aa7c2;")}>{r.prev}</span><span style={{ ...s("font-family:'IBM Plex Mono';text-align:right;"), color: this._yc(r.yoy) }}>{r.yoy}</span></div>
           ))}
         </div>
+      </div>
+    ))
+    return (
+      <div style={s('display:flex;flex-direction:column;gap:14px;')}>
+        {top}
+        {fin.statement && fin.statement.rows && fin.statement.rows.length ? this._statementGrid(fin.statement) : null}
+      </div>
+    )
+  }
+
+  // Last-4-quarters income statement (line items x quarters), Option A grid.
+  _statementGrid(st) {
+    const cols = '1.7fr repeat(4,minmax(0,1fr))'
+    const fmt = (v, eps) => v == null ? '—' : (eps ? '$' + v.toFixed(2) : v.toFixed(1))
+    const labelColor = (k) => k === 'exp' ? '#8290ad' : ((k === 'top' || k === 'sub' || k === 'net') ? '#cdd6e8' : '#9aa7c2')
+    const valColor = (k) => k === 'exp' ? '#8290ad' : ((k === 'top' || k === 'net') ? '#e8edf7' : '#cdd6e8')
+    const rev = (st.rows.find((r) => r.label === 'Revenue') || {}).vals
+    const net = (st.rows.find((r) => r.label === 'Net income') || {}).vals
+    let foot = null
+    if (rev && net && rev[0] && rev[3] && net[0] != null && net[3] != null) {
+      foot = 'Net margin ' + (net[0] / rev[0] * 100).toFixed(1) + '% → ' + (net[3] / rev[3] * 100).toFixed(1) + '%'
+    }
+    return this._card('Quarterly income statement', 'quarterly_income_stmt', (
+      <div>
+        <div style={{ ...s('display:grid;gap:6px;padding-bottom:7px;border-bottom:1px solid #1d2840;'), gridTemplateColumns: cols }}>
+          <span style={s("font-family:'IBM Plex Mono';font-size:8.5px;color:#6b7794;")}>$B · quarterly</span>
+          {st.quarters.map((q, i) => (<span key={i} style={s("font-family:'IBM Plex Mono';font-size:9.5px;text-align:right;color:#9aa7c2;")}>{q}</span>))}
+        </div>
+        {st.rows.map((r, i) => {
+          const sub = r.kind === 'sub' || r.kind === 'net' || r.kind === 'eps'
+          return (
+            <div key={i} style={{ ...s('display:grid;gap:6px;padding:7px 0;align-items:center;'), gridTemplateColumns: cols, borderTop: sub ? '1px solid #1a2336' : 'none' }}>
+              <span style={{ ...s('font-size:11px;'), color: labelColor(r.kind), fontWeight: (sub || r.kind === 'top') ? 500 : 400 }}>{r.label}</span>
+              {r.vals.map((v, j) => (<span key={j} style={{ ...s("font-family:'IBM Plex Mono';font-size:11px;text-align:right;"), color: valColor(r.kind), fontWeight: (j === 3 && (r.kind === 'top' || r.kind === 'net')) ? 500 : 400 }}>{fmt(v, r.kind === 'eps')}</span>))}
+            </div>
+          )
+        })}
+        {foot ? <div style={s("font:500 10.5px 'IBM Plex Sans';color:#6b7794;margin-top:10px;")}>{foot}</div> : null}
       </div>
     ))
   }
@@ -1480,7 +1531,7 @@ export default class App extends React.Component {
           </div>
         </div>
         {/* snapshot */}
-        <div style={s('display:grid;grid-template-columns:repeat(6,1fr);gap:11px;')}>
+        <div style={s('display:grid;grid-template-columns:repeat(7,1fr);gap:11px;')}>
           {v.stkSnapshot.map((st2, i) => (<div key={i} style={s('background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:11px 13px;')}><div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;")}>{st2.l}</div><div style={{ ...s("font-family:'IBM Plex Mono';margin-top:6px;color:#cdd6e8;"), fontSize: st2.size }}>{st2.v}</div></div>))}
         </div>
         {/* price chart (full width) */}
@@ -1527,6 +1578,27 @@ export default class App extends React.Component {
                   <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Shares</span><span style={s("font-family:'IBM Plex Mono';font-size:14px;color:#cdd6e8;")}>{v.stkPos.sharesStr}</span></div>
                   <div style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>Contribution MTD</span><span style={{ ...s("font-family:'IBM Plex Mono';font-size:14px;"), color: v.stkPos.contribColor }}>{v.stkPos.contribStr}</span></div>
                 </div>
+                )}
+              </div>
+              <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
+                <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;margin-bottom:13px;")}>Top Institutional Holders</div>
+                {v.stkHoldersState === 'loading' ? (
+                  <div style={s("font:400 11px 'IBM Plex Sans';color:#5d6a85;")}>Loading 13F holders…</div>
+                ) : (v.stkHoldersState === 'error' || !v.stkHolders.length) ? (
+                  <div style={s("font:400 11px/1.6 'IBM Plex Sans';color:#8290ad;")}>No institutional holder data available from Yahoo Finance.</div>
+                ) : (
+                  <div style={s('display:flex;flex-direction:column;gap:10px;')}>
+                    <div style={s("display:grid;grid-template-columns:1fr auto;gap:8px;font:600 8.5px 'IBM Plex Sans';letter-spacing:.05em;text-transform:uppercase;color:#6b7794;")}><span>Holder</span><span style={s('text-align:right;')}>% Out</span></div>
+                    {v.stkHolders.map((hd, i) => (
+                      <div key={i} style={s('display:grid;grid-template-columns:1fr auto;gap:8px;align-items:baseline;')}>
+                        <div style={s('min-width:0;')}>
+                          <div style={s("font:500 11.5px 'IBM Plex Sans';color:#cdd6e8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{hd.holder}</div>
+                          <div style={s("font-family:'IBM Plex Mono';font-size:9.5px;color:#6b7794;margin-top:2px;")}>{hd.sharesStr} sh · {hd.valueStr}</div>
+                        </div>
+                        <span style={s("font-family:'IBM Plex Mono';font-size:13px;color:#e8edf7;")}>{hd.pctStr}</span>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
@@ -1778,6 +1850,7 @@ export default class App extends React.Component {
           { l: 'Market Cap', v: mcStr, size: '17px' },
           { l: 'Fwd P/E', v: h.pe ? h.pe.toFixed(1) : '—', size: '17px' },
           { l: 'Price / Book', v: h.pb ? h.pb.toFixed(1) : '—', size: '17px' },
+          { l: 'EV / EBITDA', v: h.evEbitda != null ? h.evEbitda.toFixed(1) + 'x' : '—', size: '17px' },
           { l: 'Div Yield', v: h.dy != null ? h.dy.toFixed(2) + '%' : '—', size: '17px' },
           { l: 'Beta (3Y)', v: h.beta != null ? h.beta.toFixed(2) : '—', size: '17px' },
           { l: '52W Range', v: (h.lo != null ? '$' + h.lo + '–' + h.hi : '—'), size: '14px' },
@@ -1814,6 +1887,15 @@ export default class App extends React.Component {
         } else {
           v.stkPos = null
         }
+        // Top institutional shareholders (yfinance 13F).
+        const hstate = st.holders[st.ticker]
+        v.stkHoldersState = (hstate === 'loading' || hstate === undefined) ? 'loading' : (hstate === 'error' ? 'error' : 'ready')
+        v.stkHolders = (v.stkHoldersState === 'ready') ? hstate.map((r) => ({
+          holder: r.holder,
+          pctStr: r.pct != null ? r.pct.toFixed(2) + '%' : '—',
+          sharesStr: r.shares != null ? (r.shares >= 1e6 ? (r.shares / 1e6).toFixed(1) + 'M' : Math.round(r.shares).toLocaleString('en-US')) : '—',
+          valueStr: r.value != null ? '$' + (r.value >= 1000 ? (r.value / 1000).toFixed(1) + 'B' : r.value.toFixed(0) + 'M') : '—',
+        })) : []
         v.stkBackLabel = st.prevView === 'stocks' ? 'All Holdings' : (st.prevView === 'sector' ? (st.sector || 'Sector') : 'Dashboard')
       }
     }
