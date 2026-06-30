@@ -176,25 +176,27 @@ def _financials(tk):
     # Full last-4-quarters income statement (line items x quarters) for the
     # statement-grid box on the Financials tab. Oldest..newest to match the bars.
     qcols = list(reversed(cols[:4]))
+    # Money rows carry RAW dollars so the frontend can format each value
+    # adaptively (B/M/K, the same _kd logic used elsewhere); EPS stays per-share.
     stmt_defs = [
-        ("Revenue", "top", 1e9, ("Total Revenue", "Operating Revenue")),
-        ("Cost of revenue", "exp", 1e9, ("Cost Of Revenue",)),
-        ("Gross profit", "sub", 1e9, ("Gross Profit",)),
-        ("Operating expenses", "exp", 1e9, ("Operating Expense",)),
-        ("Operating income", "sub", 1e9, ("Operating Income", "Total Operating Income As Reported")),
-        ("Pretax income", "line", 1e9, ("Pretax Income",)),
-        ("Net income", "net", 1e9, ("Net Income", "Net Income Common Stockholders")),
-        ("Diluted EPS", "eps", 1.0, ("Diluted EPS", "Basic EPS")),
+        ("Revenue", "top", ("Total Revenue", "Operating Revenue")),
+        ("Cost of revenue", "exp", ("Cost Of Revenue",)),
+        ("Gross profit", "sub", ("Gross Profit",)),
+        ("Operating expenses", "exp", ("Operating Expense",)),
+        ("Operating income", "sub", ("Operating Income", "Total Operating Income As Reported")),
+        ("Pretax income", "line", ("Pretax Income",)),
+        ("Net income", "net", ("Net Income", "Net Income Common Stockholders")),
+        ("Diluted EPS", "eps", ("Diluted EPS", "Basic EPS")),
     ]
     stmt_rows = []
-    for label, kind, scale, names in stmt_defs:
+    for label, kind, names in stmt_defs:
         ser = _row(inc, *names)
         if ser is None:
             continue
-        vals = [(_num(ser[c]) / scale) if _num(ser[c]) is not None else None for c in qcols]
+        vals = [_num(ser[c]) for c in qcols]
         if all(v is None for v in vals):
             continue
-        prec = 2 if kind == "eps" else 3
+        prec = 2 if kind == "eps" else 0  # EPS to cents; dollars to whole dollars
         stmt_rows.append({"label": label, "kind": kind,
                           "vals": [round(v, prec) if v is not None else None for v in vals]})
     statement = {"quarters": [_qlabel(c) for c in qcols], "rows": stmt_rows} if stmt_rows else None

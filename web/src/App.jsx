@@ -1293,7 +1293,7 @@ export default class App extends React.Component {
   // Last-4-quarters income statement (line items x quarters), Option A grid.
   _statementGrid(st) {
     const cols = '1.7fr repeat(4,minmax(0,1fr))'
-    const fmt = (v, eps) => v == null ? '—' : (eps ? '$' + v.toFixed(2) : v.toFixed(1))
+    const fmt = (v, eps) => v == null ? '—' : (eps ? '$' + v.toFixed(2) : this._kd(v))
     const labelColor = (k) => k === 'exp' ? '#8290ad' : ((k === 'top' || k === 'sub' || k === 'net') ? '#cdd6e8' : '#9aa7c2')
     const valColor = (k) => k === 'exp' ? '#8290ad' : ((k === 'top' || k === 'net') ? '#e8edf7' : '#cdd6e8')
     const rev = (st.rows.find((r) => r.label === 'Revenue') || {}).vals
@@ -1305,7 +1305,7 @@ export default class App extends React.Component {
     return this._card('Quarterly income statement', 'quarterly_income_stmt', (
       <div>
         <div style={{ ...s('display:grid;gap:6px;padding-bottom:7px;border-bottom:1px solid #1d2840;'), gridTemplateColumns: cols }}>
-          <span style={s("font-family:'IBM Plex Mono';font-size:8.5px;color:#6b7794;")}>$B · quarterly</span>
+          <span style={s("font-family:'IBM Plex Mono';font-size:8.5px;color:#6b7794;")}>USD · quarterly</span>
           {st.quarters.map((q, i) => (<span key={i} style={s("font-family:'IBM Plex Mono';font-size:9.5px;text-align:right;color:#9aa7c2;")}>{q}</span>))}
         </div>
         {st.rows.map((r, i) => {
