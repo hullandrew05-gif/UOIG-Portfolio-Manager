@@ -1,0 +1,73 @@
+name: nightly-refresh
+
+# Pulls the nightly market data into the shared Postgres store: daily price
+# history + dividends (scripts.refresh) and company fundamentals
+# (scripts.fundamentals). Intraday spot prices are handled separately by the
+# backend's live-price poller (src/ingest/live_prices.py) — this job is only the
+# nightly historical backbone.
+#
+# Requires a DATABASE_URL repo secret pointing at the SAME Postgres (Supabase)
+# the deployed backend reads; without it the scripts would write to an ephemeral
+# runner-local SQLite that vanishes with the job, so we fail fast if it's unset.
+#
+# Schedule: 06:00 UTC daily (~01:00–02:00 ET), well after the 4pm ET close so the
+# finalized daily bar is available. Runs every day; weekends simply fetch nothing
+# new (the refresh is incremental from each ticker's last stored date).
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "Re-backfill full price history (not just incremental)"
+        type: boolean
+        default: false
+
+# Never let two refreshes write the store at once.
+concurrency:
+  group: nightly-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check DATABASE_URL is configured
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::DATABASE_URL secret is not set — refusing to run so we don't"
+            echo "::error::write to an ephemeral runner-local SQLite. Add it under"
+            echo "::error::Settings → Secrets and variables → Actions → New repository secret."
+            exit 1
+          fi
+
+      - name: Refresh prices + dividends
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python -m scripts.refresh ${{ inputs.full && '--full' || '' }}
+
+      - name: Refresh fundamentals
+        # Non-fatal: a fundamentals hiccup (Yahoo rate-limit) shouldn't fail the
+        # price refresh, which already committed above.
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python -m scripts.fundamentals
