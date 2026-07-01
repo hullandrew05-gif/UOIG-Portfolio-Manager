@@ -1,5 +1,5 @@
 import React from 'react'
-import { getData, getSeries, getFundSeries, getSectorSeries, getStock, getPredictions, getThesis, postChat, runAgent, getAgentRun, searchTickers, getQuote, getHolders, getOptimizeDiagnostics, getMe, logout, loginUrl, sendInvite, passwordLogin, requestPasswordReset, confirmPasswordReset, verifyEmail, getInvitation, acceptPassword } from './api.js'
+import { getData, getSeries, getFundSeries, getSectorSeries, getStock, getPredictions, getThesis, postChat, runAgent, getAgentRun, searchTickers, getQuote, getHolders, getOptimizeDiagnostics, getOptimizeWhatif, postOptimizeSolve, getMe, logout, loginUrl, sendInvite, passwordLogin, requestPasswordReset, confirmPasswordReset, verifyEmail, getInvitation, acceptPassword } from './api.js'
 
 // UOIG sector taxonomy: the five groups the club uses, each rolling up one or
 // more yfinance GICS sectors. Order here is the board's column order.
@@ -273,6 +273,12 @@ export default class App extends React.Component {
       optimizeFund: null,  // selected fund key on the Optimize page (defaults to first fund)
       optimizeTab: 'diagnostics',  // diagnostics | whatif | optimizer
       optimizeDiag: {},  // cache: fundKey -> diagnostics payload | 'loading' | 'error'
+      whatif: {},  // cache: fundKey -> whatif payload (cov, weights) | 'loading' | 'error'
+      whatifAdj: {},  // fundKey -> {ticker: adjusted weight %} (slider state)
+      whatifDest: 'overlay',  // where trim proceeds go: 'overlay' | 'cash'
+      optResult: {},  // cache: fundKey -> BL solve result | 'loading' | 'error'
+      optViews: {},  // fundKey -> {ticker: {q: str, conf: 'low'|'med'|'high'}}
+      optCap: '10', optErp: '5',  // optimizer constraint inputs (% strings)
       searchQ: '', searchResults: [], searchOpen: false, searchActive: -1,
     }
     this._searchSeq = 0
@@ -502,8 +508,15 @@ export default class App extends React.Component {
     if (this.state.view === 'sector' &&
         (prev.view !== 'sector' || prev.sector !== this.state.sector ||
          prev.sectorPeriod !== this.state.sectorPeriod)) this._ensureSectorSeries()
-    if (this.state.view === 'optimize' &&
-        (prev.view !== 'optimize' || prev.optimizeFund !== this.state.optimizeFund)) this._ensureOptimizeDiag()
+    if (this.state.view === 'optimize') {
+      const optCtx = prev.view !== 'optimize' || prev.optimizeFund !== this.state.optimizeFund ||
+                     prev.optimizeTab !== this.state.optimizeTab
+      if (optCtx) {
+        this._ensureOptimizeDiag()
+        if (this.state.optimizeTab === 'whatif') this._ensureWhatif()
+        if (this.state.optimizeTab === 'optimizer') { this._ensureWhatif(); this._ensureOptSolve() }
+      }
+    }
     const pl = (prev.chat && prev.chat.length) || 0
     if (this.chatRef.current && (pl !== this.state.chat.length || prev.loading !== this.state.loading))
       this.chatRef.current.scrollTop = this.chatRef.current.scrollHeight
@@ -734,6 +747,66 @@ export default class App extends React.Component {
     getOptimizeDiagnostics(key)
       .then((res) => this.setState((st) => ({ optimizeDiag: { ...st.optimizeDiag, [key]: res } })))
       .catch(() => this.setState((st) => ({ optimizeDiag: { ...st.optimizeDiag, [key]: 'error' } })))
+  }
+
+  // What-if sandbox inputs (covariance + weights) — the client recomputes risk live.
+  _ensureWhatif() {
+    const key = this.state.optimizeFund || (this.fundKeys && this.fundKeys[0])
+    if (!key || this.state.whatif[key]) return
+    this.setState((st) => ({ whatif: { ...st.whatif, [key]: 'loading' } }))
+    getOptimizeWhatif(key)
+      .then((res) => this.setState((st) => ({ whatif: { ...st.whatif, [key]: res } })))
+      .catch(() => this.setState((st) => ({ whatif: { ...st.whatif, [key]: 'error' } })))
+  }
+
+  // Black-Litterman solve. Auto-runs once per fund (implied returns, no views);
+  // the Solve button re-runs with the club's views and constraints.
+  _ensureOptSolve() {
+    const key = this.state.optimizeFund || (this.fundKeys && this.fundKeys[0])
+    if (!key || this.state.optResult[key]) return
+    this._runSolve(key)
+  }
+
+  _runSolve(k) {
+    const key = k || this.state.optimizeFund || (this.fundKeys && this.fundKeys[0])
+    if (!key) return
+    const vmap = this.state.optViews[key] || {}
+    const views = Object.entries(vmap)
+      .filter(([, v]) => v && v.q !== '' && !isNaN(parseFloat(v.q)))
+      .map(([t, v]) => ({ t, q: parseFloat(v.q), conf: v.conf || 'med' }))
+    const body = { views, max_pos: parseFloat(this.state.optCap) || 10, erp: parseFloat(this.state.optErp) || 5 }
+    this.setState((st) => ({ optResult: { ...st.optResult, [key]: 'loading' } }))
+    postOptimizeSolve(key, body)
+      .then((res) => this.setState((st) => ({ optResult: { ...st.optResult, [key]: res } })))
+      .catch(() => this.setState((st) => ({ optResult: { ...st.optResult, [key]: 'error' } })))
+  }
+
+  // Ex-ante portfolio stats from the shipped covariance — mirrors the backend's
+  // math exactly (verified equal) so slider moves recompute instantly client-side.
+  // w: stock weight fractions (payload order), o: overlay fraction, cash: fraction.
+  _wfStats(d, w, o, cash) {
+    const n = w.length, cov = d.cov
+    const x = w.concat([-(1 - o)])   // active-return coefficients (bench last)
+    const y = w.concat([o])          // total-return coefficients
+    let te2 = 0, v2 = 0, cb = 0
+    const sx = new Array(n + 1).fill(0)
+    for (let i = 0; i <= n; i++) {
+      let sxi = 0, syi = 0
+      for (let j = 0; j <= n; j++) { sxi += cov[i][j] * x[j]; syi += cov[i][j] * y[j] }
+      sx[i] = sxi
+      te2 += x[i] * sxi; v2 += y[i] * syi
+      if (i < n) cb += w[i] * cov[i][n]
+    }
+    const varB = cov[n][n] || 1
+    const beta = (cb + o * varB) / varB
+    // Look-through active share (+ cash counts as an active bet)
+    let heldAbs = 0, heldBench = 0
+    for (let i = 0; i < n; i++) { heldAbs += Math.abs(w[i] - (1 - o) * d.stocks[i].bench_w); heldBench += d.stocks[i].bench_w }
+    const as = 0.5 * (heldAbs + (1 - o) * Math.max((d.bench_total || 1) - heldBench, 0) + Math.max(cash, 0)) * 100
+    // Per-stock share of active variance (signed; bench row omitted)
+    const rc = []
+    for (let i = 0; i < n; i++) rc.push(te2 > 0 ? (x[i] * sx[i]) / te2 * 100 : 0)
+    return { te: Math.sqrt(Math.max(te2, 0)) * 100, vol: Math.sqrt(Math.max(v2, 0)) * 100, beta, as, rc }
   }
 
   _ensureThesis() {
@@ -1675,23 +1748,17 @@ export default class App extends React.Component {
             <span key={k} onClick={() => this.setState({ optimizeTab: k })} style={{ ...s("padding:9px 15px;font-size:11.5px;font-family:'IBM Plex Sans';cursor:pointer;margin-bottom:-1px;"), fontWeight: k === tab ? 600 : 500, color: k === tab ? '#e8edf7' : '#6b7794', borderBottom: k === tab ? '2px solid #5a93f9' : '2px solid transparent' }}>{label}</span>
           ))}
         </div>
-        {loading && <div style={s("background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:30px;display:flex;justify-content:center;color:#5d6a85;font:500 11px 'IBM Plex Sans';")}>Computing active-risk diagnostics…</div>}
-        {errored && <div style={s("background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:30px;display:flex;justify-content:center;color:#8290ad;font:500 11px 'IBM Plex Sans';")}>Could not load diagnostics for {f.name}.</div>}
-        {data && tab === 'diagnostics' && this._renderOptimizeDiag(data)}
-        {data && tab === 'whatif' && this._optimizeStub('What-if sandbox', 'Weight sliders that recompute tracking error and active share live as you trim or add to positions. This is the next tab we build.')}
-        {data && tab === 'optimizer' && this._optimizeStub('Black-Litterman optimizer', 'Market-implied returns overlaid with the club’s analyst views, solved under long-only and turnover constraints. Phase 2.')}
+        {tab === 'diagnostics' && loading && this._optimizeMsg('Computing active-risk diagnostics…')}
+        {tab === 'diagnostics' && errored && this._optimizeMsg('Could not load diagnostics for ' + f.name + '.')}
+        {tab === 'diagnostics' && data && this._renderOptimizeDiag(data)}
+        {tab === 'whatif' && this._renderWhatifTab(key)}
+        {tab === 'optimizer' && this._renderOptimizerTab(key)}
       </div>
     )
   }
 
-  _optimizeStub(title, msg) {
-    return (
-      <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:30px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;')}>
-        <span style={s('font-size:22px;color:#3c4a66;')}>⊟</span>
-        <div style={s("font:600 12.5px 'IBM Plex Sans';color:#cdd6e8;")}>{title}</div>
-        <div style={s("font:400 11px/1.6 'IBM Plex Sans';color:#8290ad;max-width:420px;")}>{msg}</div>
-      </div>
-    )
+  _optimizeMsg(text) {
+    return <div style={s("background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:30px;display:flex;justify-content:center;color:#5d6a85;font:500 11px 'IBM Plex Sans';")}>{text}</div>
   }
 
   _renderOptimizeDiag(d) {
@@ -1772,6 +1839,310 @@ export default class App extends React.Component {
         </div>
       </React.Fragment>
     )
+  }
+
+  // ---------- What-if sandbox: live client-side risk math on the shipped covariance ----------
+  _renderWhatifTab(key) {
+    const st = this.state
+    const d = st.whatif[key]
+    if (!d || d === 'loading') return this._optimizeMsg('Loading book and covariance matrix…')
+    if (d === 'error') return this._optimizeMsg('Could not load what-if inputs.')
+
+    const adj = st.whatifAdj[key] || {}
+    const dest = st.whatifDest
+    const cur = d.stocks.map((x) => x.w * 100)
+    const now_ = d.stocks.map((x, i) => (adj[x.t] !== undefined ? adj[x.t] : cur[i]))
+    const sumDelta = now_.reduce((a, w, i) => a + (w - cur[i]), 0)
+    let o = d.overlay * 100, cash = 0
+    if (dest === 'overlay') o -= sumDelta; else cash = -sumDelta
+    const infeasible = (dest === 'overlay' ? o : cash) < -0.05
+
+    const base = this._wfStats(d, cur.map((w) => w / 100), d.overlay, 0)
+    const live = this._wfStats(d, now_.map((w) => w / 100), Math.max(o, 0) / 100, Math.max(cash, 0) / 100)
+    const changed = d.stocks.map((x, i) => ({ ...x, i, from: cur[i], to: now_[i], delta: now_[i] - cur[i] }))
+      .filter((x) => Math.abs(x.delta) >= 0.05).sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
+    const rcTop = d.stocks.map((x, i) => ({ t: x.t, rc: live.rc[i], active: now_[i] - (1 - Math.max(o, 0) / 100) * x.bench_w * 100 }))
+      .sort((a, b) => Math.abs(b.rc) - Math.abs(a.rc)).slice(0, 6)
+    const maxRc = Math.max.apply(null, rcTop.map((r) => Math.abs(r.rc)).concat([1]))
+
+    const cmp = (b2, l2, dp, pct, goodDown) => {
+      const same = Math.abs(l2 - b2) < Math.pow(10, -dp) / 2
+      const color = same ? '#cdd6e8' : (goodDown === null ? '#cdd6e8' : ((l2 < b2) === goodDown ? '#21d07a' : '#ff5666'))
+      return { from: b2.toFixed(dp) + (pct ? '%' : ''), to: l2.toFixed(dp) + (pct ? '%' : ''), color, same }
+    }
+    const kpis = [
+      { l: 'Tracking Error', ...cmp(base.te, live.te, 2, true, true), sub: 'ex-ante, ann.' },
+      { l: 'Active Share', ...cmp(base.as, live.as, 1, true, null), sub: 'look-through' },
+      { l: 'Beta vs ' + d.benchmark, ...cmp(base.beta, live.beta, 2, false, null), sub: '3Y daily cov' },
+      { l: 'Portfolio Vol', ...cmp(base.vol, live.vol, 1, true, true), sub: 'total, ann.' },
+    ]
+    const nCells = d.stocks.length
+    const cell = Math.max(9, Math.min(15, Math.floor(430 / nCells)))
+    let lastGroup = null
+
+    return (
+      <React.Fragment>
+        {/* KPI strip: baseline -> live */}
+        <div style={s('display:grid;grid-template-columns:repeat(4,1fr);gap:11px;')}>
+          {kpis.map((t, i) => (
+            <div key={i} style={{ ...s('background:#0e1422;border:1px solid #1d2840;border-radius:0 8px 8px 0;padding:11px 13px;'), borderLeft: '3px solid ' + (i < 2 ? '#5a93f9' : '#2a3a5c') }}>
+              <div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.05em;text-transform:uppercase;color:#6b7794;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{t.l}</div>
+              <div style={s("font-family:'IBM Plex Mono';font-size:16px;margin-top:5px;")}>
+                <span style={{ color: t.same ? '#e8edf7' : '#5d6a85' }}>{t.from}</span>
+                {!t.same && <span style={{ color: '#6b7794' }}> → </span>}
+                {!t.same && <span style={{ color: t.color }}>{t.to}</span>}
+              </div>
+              <div style={s('font-size:9px;color:#5d6a85;margin-top:2px;')}>{t.sub}</div>
+            </div>
+          ))}
+        </div>
+        {/* controls: destination + reset + feasibility */}
+        <div style={s('display:flex;justify-content:space-between;align-items:center;background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:10px 14px;')}>
+          <div style={s('display:flex;align-items:center;gap:9px;')}>
+            <span style={s("font:600 9px 'IBM Plex Sans';letter-spacing:.07em;text-transform:uppercase;color:#6b7794;")}>Trim proceeds →</span>
+            {[['overlay', d.benchmark + ' overlay'], ['cash', 'Cash']].map(([k2, label]) => (
+              <span key={k2} onClick={() => this.setState({ whatifDest: k2 })} style={{ ...s("padding:4px 11px;border-radius:5px;cursor:pointer;font:600 10px 'IBM Plex Sans';"), background: dest === k2 ? '#13203a' : 'transparent', color: dest === k2 ? '#5a93f9' : '#6b7794', border: dest === k2 ? '1px solid #28406e' : '1px solid #1d2840' }}>{label}</span>
+            ))}
+            <span style={s("font-family:'IBM Plex Mono';font-size:10px;color:#5d6a85;margin-left:6px;")}>overlay {Math.max(o, 0).toFixed(1)}% · cash {Math.max(cash, 0).toFixed(1)}%</span>
+            {infeasible && <span style={s("font:600 10px 'IBM Plex Sans';color:#ff5666;")}>adds exceed available {dest === 'overlay' ? 'overlay' : 'cash'} — trim elsewhere</span>}
+          </div>
+          <span onClick={() => this.setState((s2) => ({ whatifAdj: { ...s2.whatifAdj, [key]: {} } }))} style={s("font:600 10px 'IBM Plex Sans';color:#9aa7c2;background:#13203a;border:1px solid #24345a;border-radius:5px;padding:4px 11px;cursor:pointer;")}>Reset</span>
+        </div>
+        <div style={s('display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:14px;align-items:start;')}>
+          {/* sliders, grouped by UOIG sector */}
+          <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
+            <div style={s('display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;')}>
+              <span style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;")}>Position Weights</span>
+              <span style={s('font-size:9.5px;color:#5d6a85;')}>drag to restage · grey tick = benchmark weight</span>
+            </div>
+            {d.stocks.map((x, i) => {
+              const head = x.group !== lastGroup ? (lastGroup = x.group) : null
+              const max = Math.max(cur[i] * 2, cur[i] + 5, 2)
+              const delta = now_[i] - cur[i]
+              const benchPos = Math.min(x.bench_w * 100 / max * 100, 100)
+              return (
+                <React.Fragment key={x.t}>
+                  {head && <div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.09em;text-transform:uppercase;color:#5d6a85;margin:11px 0 3px;")}>{head}</div>}
+                  <div style={s('display:grid;grid-template-columns:52px minmax(0,1fr) 108px;gap:10px;align-items:center;padding:4px 0;')}>
+                    <span style={s("font-family:'IBM Plex Mono';font-weight:500;font-size:11.5px;color:#e8edf7;")}>{x.t}</span>
+                    <div style={s('position:relative;display:flex;align-items:center;')}>
+                      <div style={{ ...s('position:absolute;top:-2px;width:1.5px;height:5px;background:#5d6a85;z-index:1;'), left: benchPos + '%' }}></div>
+                      <input type="range" min={0} max={max} step={0.1} value={now_[i]}
+                        onChange={(e) => { const v2 = parseFloat(e.target.value); this.setState((s2) => ({ whatifAdj: { ...s2.whatifAdj, [key]: { ...(s2.whatifAdj[key] || {}), [x.t]: v2 } } })) }}
+                        style={{ width: '100%', accentColor: Math.abs(delta) >= 0.05 ? '#5a93f9' : '#2a3a5c', height: '3px' }} />
+                    </div>
+                    <span style={s("font-family:'IBM Plex Mono';font-size:10.5px;text-align:right;color:#cdd6e8;")}>
+                      {now_[i].toFixed(1)}%
+                      <span style={{ color: Math.abs(delta) < 0.05 ? '#3c465e' : (delta > 0 ? '#21d07a' : '#ff5666') }}> {Math.abs(delta) < 0.05 ? '·' : this._sign(delta, 1)}</span>
+                    </span>
+                  </div>
+                </React.Fragment>
+              )
+            })}
+          </div>
+          <div style={s('display:flex;flex-direction:column;gap:14px;')}>
+            {/* staged trades */}
+            <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
+              <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;margin-bottom:11px;")}>Staged Trades</div>
+              {!changed.length && <div style={s("font:400 11px/1.6 'IBM Plex Sans';color:#5d6a85;")}>No changes staged. Drag a slider to model a trade.</div>}
+              {changed.map((x) => (
+                <div key={x.t} style={s('display:grid;grid-template-columns:38px 52px 1fr auto;gap:9px;align-items:center;padding:6px 0;border-bottom:1px solid #131c2f;')}>
+                  <span style={{ ...s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.05em;border-radius:4px;padding:2px 0;text-align:center;"), color: x.delta > 0 ? '#21d07a' : '#ff5666', border: '1px solid ' + (x.delta > 0 ? '#1a5c3d' : '#6e2a35') }}>{x.delta > 0 ? 'BUY' : 'SELL'}</span>
+                  <span style={s("font-family:'IBM Plex Mono';font-weight:500;font-size:11.5px;color:#e8edf7;")}>{x.t}</span>
+                  <span style={s("font-family:'IBM Plex Mono';font-size:10.5px;color:#8290ad;")}>{x.from.toFixed(1)}% → {x.to.toFixed(1)}%</span>
+                  <span style={{ ...s("font-family:'IBM Plex Mono';font-size:11px;text-align:right;"), color: x.delta > 0 ? '#21d07a' : '#ff5666' }}>{this._kdSigned(x.delta / 100 * d.invested_value)}</span>
+                </div>
+              ))}
+              {changed.length > 0 && <div style={s("display:flex;justify-content:space-between;margin-top:9px;font-family:'IBM Plex Mono';font-size:10px;color:#6b7794;")}><span>{changed.length} trades</span><span>turnover {(changed.reduce((a, x) => a + Math.abs(x.delta), 0) / 2).toFixed(1)}%</span></div>}
+            </div>
+            {/* live active-risk contributors */}
+            <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
+              <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;margin-bottom:11px;")}>Active Risk · live</div>
+              {rcTop.map((r) => (
+                <div key={r.t} style={s('display:grid;grid-template-columns:52px 1fr 44px;gap:9px;align-items:center;padding:5px 0;')}>
+                  <span style={s("font-family:'IBM Plex Mono';font-weight:500;font-size:11.5px;color:#e8edf7;")}>{r.t}</span>
+                  <div style={s('display:flex;align-items:center;')}><span style={{ ...s('height:6px;border-radius:3px;opacity:.8;'), width: Math.max(4, Math.abs(r.rc) / maxRc * 100) + '%', background: r.rc >= 0 ? (r.active >= 0 ? '#21d07a' : '#ff5666') : '#5d6a85' }}></span></div>
+                  <span style={s("font-family:'IBM Plex Mono';font-size:11px;text-align:right;color:#cdd6e8;")}>{Math.round(r.rc)}%</span>
+                </div>
+              ))}
+              <div style={s('font-size:9px;color:#5d6a85;margin-top:8px;')}>Share of ex-ante tracking variance. Recomputes as you drag.</div>
+            </div>
+          </div>
+        </div>
+        {/* correlation heatmap */}
+        <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;overflow-x:auto;')}>
+          <div style={s('display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;')}>
+            <span style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;")}>Correlation · 3Y daily</span>
+            <span style={s('font-size:9.5px;color:#5d6a85;')}><span style={s('color:#ff5666;')}>■</span> +1 · <span style={s('color:#21d07a;')}>■</span> −1 · grouped by sector</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '46px repeat(' + nCells + ', ' + cell + 'px)', gap: '1px', width: 'fit-content' }}>
+            <div></div>
+            {d.stocks.map((x) => (<div key={'h' + x.t} title={x.t} style={{ ...s('font-size:7.5px;color:#6b7794;overflow:hidden;'), fontFamily: "'IBM Plex Mono'", writingMode: 'vertical-rl', height: '30px', lineHeight: cell + 'px' }}>{x.t}</div>))}
+            {d.stocks.map((x, i2) => (
+              <React.Fragment key={'r' + x.t}>
+                <div style={{ ...s('font-size:8.5px;color:#8290ad;text-align:right;padding-right:5px;'), fontFamily: "'IBM Plex Mono'", lineHeight: cell + 'px' }}>{x.t}</div>
+                {d.corr[i2].map((c, j2) => (
+                  <div key={j2} title={x.t + ' × ' + d.stocks[j2].t + ': ' + c.toFixed(2)}
+                    style={{ width: cell + 'px', height: cell + 'px', borderRadius: '1px', background: i2 === j2 ? '#2a3a5c' : (c >= 0 ? 'rgba(255,86,102,' + (c * 0.85).toFixed(2) + ')' : 'rgba(33,208,122,' + (-c * 0.85).toFixed(2) + ')') }}></div>
+                ))}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      </React.Fragment>
+    )
+  }
+
+  // ---------- Black-Litterman optimizer tab ----------
+  _renderOptimizerTab(key) {
+    const st = this.state
+    const res = st.optResult[key]
+    const vmap = st.optViews[key] || {}
+    const setView = (t, patch) => this.setState((s2) => {
+      const cown = { ...(s2.optViews[key] || {}) }
+      cown[t] = { q: '', conf: 'med', ...(cown[t] || {}), ...patch }
+      if (patch.q === '' && !patch.conf) delete cown[t]
+      return { optViews: { ...s2.optViews, [key]: cown } }
+    })
+    const params = (
+      <div style={s('display:flex;justify-content:space-between;align-items:center;background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:10px 14px;')}>
+        <div style={s('display:flex;align-items:center;gap:16px;')}>
+          {[['Max position', 'optCap', '%'], ['Benchmark ERP', 'optErp', '%/yr']].map(([label, sk, unit]) => (
+            <label key={sk} style={s("display:flex;align-items:center;gap:7px;font:600 9px 'IBM Plex Sans';letter-spacing:.06em;text-transform:uppercase;color:#6b7794;")}>
+              {label}
+              <input value={st[sk]} onChange={(e) => this.setState({ [sk]: e.target.value })}
+                style={{ ...s("width:44px;background:#0a0f1a;border:1px solid #1d2840;border-radius:5px;color:#e8edf7;padding:4px 7px;font-size:11px;text-align:right;outline:none;"), fontFamily: "'IBM Plex Mono'" }} />
+              <span style={s('color:#5d6a85;text-transform:none;letter-spacing:0;')}>{unit}</span>
+            </label>
+          ))}
+          {res && res !== 'loading' && res !== 'error' && <span style={s("font-family:'IBM Plex Mono';font-size:10px;color:#5d6a85;")}>rf {res.rf}% · τ 0.05 · long-only · overlay fixed at {res.overlay}%</span>}
+        </div>
+        <span onClick={() => this._runSolve(key)} style={s("font:600 10.5px 'IBM Plex Sans';color:#0a0f1a;background:#5a93f9;border-radius:6px;padding:6px 16px;cursor:pointer;")}>{res === 'loading' ? 'Solving…' : 'Solve'}</span>
+      </div>
+    )
+    if (!res || res === 'loading') return <React.Fragment>{params}{this._optimizeMsg('Running the Black-Litterman solve — implied returns, posterior tilt, constrained frontier…')}</React.Fragment>
+    if (res === 'error') return <React.Fragment>{params}{this._optimizeMsg('Solve failed. Check inputs and try again.')}</React.Fragment>
+
+    const sb = res.stats.before, sa = res.stats.after
+    const stat = (label, b2, a2, unit, goodUp) => {
+      const same = Math.abs(a2 - b2) < 0.005
+      const color = same ? '#cdd6e8' : (goodUp === null ? '#cdd6e8' : ((a2 > b2) === goodUp ? '#21d07a' : '#ff5666'))
+      return { label, b: b2 + (unit || ''), a: a2 + (unit || ''), color, same }
+    }
+    const stats = [
+      stat('Exp Return', sb.ret, sa.ret, '%', true),
+      stat('Volatility', sb.vol, sa.vol, '%', false),
+      stat('Sharpe', sb.sharpe, sa.sharpe, '', true),
+      stat('Tracking Err', sb.te, sa.te, '%', null),
+      stat('Beta', sb.beta, sa.beta, '', null),
+    ]
+    const trades = res.rows.filter((r) => Math.abs(r.delta) >= 0.1)
+    return (
+      <React.Fragment>
+        {params}
+        <div style={s('display:grid;grid-template-columns:repeat(5,1fr) auto;gap:11px;')}>
+          {stats.map((t, i) => (
+            <div key={i} style={s('background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:10px 13px;')}>
+              <div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.05em;text-transform:uppercase;color:#6b7794;white-space:nowrap;")}>{t.label}</div>
+              <div style={s("font-family:'IBM Plex Mono';font-size:14.5px;margin-top:5px;")}>
+                <span style={{ color: '#5d6a85' }}>{t.b}</span><span style={{ color: '#6b7794' }}> → </span><span style={{ color: t.color }}>{t.a}</span>
+              </div>
+            </div>
+          ))}
+          <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:8px;padding:10px 13px;')}>
+            <div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.05em;text-transform:uppercase;color:#6b7794;")}>Turnover</div>
+            <div style={s("font-family:'IBM Plex Mono';font-size:14.5px;margin-top:5px;color:#f4a531;")}>{res.turnover}%</div>
+          </div>
+        </div>
+        <div style={s('display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:14px;align-items:start;')}>
+          {/* views editor */}
+          <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
+            <div style={s('display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;')}>
+              <span style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;")}>Club Views</span>
+              <span style={s('font-size:9.5px;color:#5d6a85;')}>expected out/under-performance vs {res.benchmark}, %/yr → Solve</span>
+            </div>
+            <div style={s("display:grid;grid-template-columns:50px 1fr 66px 66px 66px 96px;gap:8px;font:600 8.5px 'IBM Plex Sans';letter-spacing:.05em;text-transform:uppercase;color:#6b7794;padding-bottom:6px;border-bottom:1px solid #1d2840;")}>
+              <span>Ticker</span><span>Name</span><span style={s('text-align:right;')}>Implied</span><span style={s('text-align:right;')}>Posterior</span><span style={s('text-align:right;')}>View %</span><span style={s('text-align:center;')}>Confidence</span>
+            </div>
+            {res.rows.slice().sort((a, b) => b.w_cur - a.w_cur).map((r) => {
+              const v2 = vmap[r.t] || { q: '', conf: 'med' }
+              return (
+                <div key={r.t} style={s('display:grid;grid-template-columns:50px 1fr 66px 66px 66px 96px;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #131c2f;')}>
+                  <span style={s("font-family:'IBM Plex Mono';font-weight:500;font-size:11.5px;color:#e8edf7;")}>{r.t}</span>
+                  <span style={s("font:400 10px 'IBM Plex Sans';color:#8290ad;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{r.name}</span>
+                  <span style={s("font-family:'IBM Plex Mono';font-size:10.5px;text-align:right;color:#6b7794;")}>{r.implied}%</span>
+                  <span style={{ ...s("font-family:'IBM Plex Mono';font-size:10.5px;text-align:right;"), color: Math.abs(r.posterior - r.implied) > 0.05 ? '#5a93f9' : '#cdd6e8' }}>{r.posterior}%</span>
+                  <input value={v2.q} placeholder="—" onChange={(e) => setView(r.t, { q: e.target.value.replace(/[^0-9.\-]/g, '') })}
+                    style={{ ...s('width:100%;background:#0a0f1a;border:1px solid #1d2840;border-radius:4px;color:#e8edf7;padding:3px 6px;font-size:10.5px;text-align:right;outline:none;box-sizing:border-box;'), fontFamily: "'IBM Plex Mono'" }} />
+                  <div style={s('display:flex;gap:2px;justify-content:center;')}>
+                    {['low', 'med', 'high'].map((c2) => (
+                      <span key={c2} onClick={() => setView(r.t, { conf: c2 })} style={{ ...s("padding:2px 6px;border-radius:3px;cursor:pointer;font:600 8px 'IBM Plex Sans';text-transform:uppercase;"), background: v2.conf === c2 && v2.q !== '' ? '#13203a' : 'transparent', color: v2.conf === c2 && v2.q !== '' ? '#5a93f9' : '#3c465e', border: '1px solid ' + (v2.conf === c2 && v2.q !== '' ? '#28406e' : '#1d2840') }}>{c2[0]}</span>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <div style={s('display:flex;flex-direction:column;gap:14px;')}>
+            {/* efficient frontier */}
+            <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
+              <div style={s('display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;')}>
+                <span style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;")}>Constrained Frontier</span>
+                <div style={s("display:flex;gap:11px;font:500 9.5px 'IBM Plex Sans';")}>
+                  <span style={s('color:#8290ad;')}>● current</span><span style={s('color:#21d07a;')}>● proposed</span><span style={s('color:#f4a531;')}>● min-var</span>
+                </div>
+              </div>
+              {this._frontierChart(res)}
+            </div>
+            {/* proposed trades */}
+            <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
+              <div style={s('display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;')}>
+                <span style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;")}>Proposed Trades</span>
+                <span style={s('font-size:9.5px;color:#5d6a85;')}>max-Sharpe portfolio · {res.n_views} view{res.n_views === 1 ? '' : 's'}</span>
+              </div>
+              {trades.map((r) => (
+                <div key={r.t} style={s('display:grid;grid-template-columns:38px 52px 1fr auto;gap:9px;align-items:center;padding:5px 0;border-bottom:1px solid #131c2f;')}>
+                  <span style={{ ...s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.05em;border-radius:4px;padding:2px 0;text-align:center;"), color: r.delta > 0 ? '#21d07a' : '#ff5666', border: '1px solid ' + (r.delta > 0 ? '#1a5c3d' : '#6e2a35') }}>{r.delta > 0 ? 'BUY' : 'SELL'}</span>
+                  <span style={s("font-family:'IBM Plex Mono';font-weight:500;font-size:11.5px;color:#e8edf7;")}>{r.t}</span>
+                  <span style={s("font-family:'IBM Plex Mono';font-size:10.5px;color:#8290ad;")}>{r.w_cur.toFixed(1)}% → {r.w_prop.toFixed(1)}%</span>
+                  <span style={{ ...s("font-family:'IBM Plex Mono';font-size:11px;text-align:right;"), color: r.delta > 0 ? '#21d07a' : '#ff5666' }}>{this._kdSigned(r.dollars)}</span>
+                </div>
+              ))}
+              {!trades.length && <div style={s("font:400 11px/1.6 'IBM Plex Sans';color:#5d6a85;")}>The current book is already on the constrained frontier.</div>}
+            </div>
+          </div>
+        </div>
+      </React.Fragment>
+    )
+  }
+
+  _frontierChart(res) {
+    const W = 520, H = 210, ml = 40, mr = 12, mt = 10, mb = 26
+    const pts = res.frontier.concat([res.points.current, res.points.proposed, res.points.minvar])
+    const xs = pts.map((p) => p.vol), ys = pts.map((p) => p.ret)
+    const x0 = Math.min.apply(null, xs) - 0.6, x1 = Math.max.apply(null, xs) + 0.6
+    const y0 = Math.min.apply(null, ys) - 0.5, y1 = Math.max.apply(null, ys) + 0.5
+    const X = (v) => ml + (v - x0) / ((x1 - x0) || 1) * (W - ml - mr)
+    const Y = (v) => mt + (1 - (v - y0) / ((y1 - y0) || 1)) * (H - mt - mb)
+    const path = res.frontier.map((p, i) => (i ? 'L' : 'M') + X(p.vol).toFixed(1) + ',' + Y(p.ret).toFixed(1)).join(' ')
+    const ticksX = [0, 1, 2, 3].map((i) => x0 + (x1 - x0) * i / 3)
+    const ticksY = [0, 1, 2, 3].map((i) => y0 + (y1 - y0) * i / 3)
+    const dot = (p, color, label, anchor) => [
+      React.createElement('circle', { key: 'c' + label, cx: X(p.vol), cy: Y(p.ret), r: 4, style: { fill: color, stroke: '#0e1422', strokeWidth: 1.5 } }),
+      React.createElement('text', { key: 't' + label, x: X(p.vol) + (anchor === 'end' ? -7 : 7), y: Y(p.ret) + 3, textAnchor: anchor || 'start', style: { fill: color, font: "600 8.5px 'IBM Plex Sans'" } }, label),
+    ]
+    return React.createElement('svg', { viewBox: '0 0 ' + W + ' ' + H, style: { width: '100%', display: 'block' } },
+      ticksY.map((t, i) => React.createElement('g', { key: 'gy' + i }, [
+        React.createElement('line', { key: 'l', x1: ml, x2: W - mr, y1: Y(t), y2: Y(t), style: { stroke: '#16203a', strokeWidth: 1 } }),
+        React.createElement('text', { key: 't', x: ml - 5, y: Y(t) + 3, textAnchor: 'end', style: { fill: '#5d6a85', font: "8.5px 'IBM Plex Mono'" } }, t.toFixed(1) + '%'),
+      ])).concat(ticksX.map((t, i) => React.createElement('text', { key: 'gx' + i, x: X(t), y: H - 8, textAnchor: 'middle', style: { fill: '#5d6a85', font: "8.5px 'IBM Plex Mono'" } }, t.toFixed(1) + '%')))
+        .concat([
+          React.createElement('text', { key: 'xl', x: (ml + W - mr) / 2, y: H - 0.5, textAnchor: 'middle', style: { fill: '#3c465e', font: "600 7.5px 'IBM Plex Sans'", letterSpacing: '.08em' } }, 'VOLATILITY (ANN)'),
+          React.createElement('path', { key: 'fr', d: path, style: { fill: 'none', stroke: '#5a93f9', strokeWidth: 1.8, strokeLinecap: 'round' } }),
+        ])
+        .concat(dot(res.points.minvar, '#f4a531', 'min-var', 'start'))
+        .concat(dot(res.points.current, '#8290ad', 'current', 'start'))
+        .concat(dot(res.points.proposed, '#21d07a', 'proposed', 'end')))
   }
 
   _renderSector(v) {

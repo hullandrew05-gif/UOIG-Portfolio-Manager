@@ -45,7 +45,8 @@ from src.ingest.predictions import stock_predictions  # noqa: E402
 from src.ingest.thesis import stock_thesis  # noqa: E402
 from src.assistant import answer as llm_answer, api_key as llm_key  # noqa: E402
 from src.analytics.risk import daily_returns_matrix  # noqa: E402
-from src.analytics.optimize import fund_diagnostics  # noqa: E402
+from src.analytics.optimize import (fund_diagnostics, solve_optimizer,  # noqa: E402
+                                    whatif_payload)
 from src.analytics.series import (price_frame, period_return, synthetic_index,  # noqa: E402
                                   ticker_series, trailing_return)
 from src.config import db_path, load_config  # noqa: E402
@@ -470,6 +471,44 @@ def optimize_diagnostics(fund: str):
     conn = _conn()
     try:
         return fund_diagnostics(CFG, conn, name)
+    finally:
+        conn.close()
+
+
+@app.get("/api/optimize/whatif/{fund}")
+def optimize_whatif(fund: str):
+    """What-if sandbox inputs: current book split (stocks/overlay), benchmark
+    weights, and the annualized covariance so the client can recompute tracking
+    error / active share / beta / vol live as sliders move."""
+    name, _ = _fund_name(fund)
+    if not name:
+        raise HTTPException(404, f"unknown fund {fund}")
+    conn = _conn()
+    try:
+        return whatif_payload(CFG, conn, name)
+    finally:
+        conn.close()
+
+
+@app.post("/api/optimize/solve/{fund}")
+def optimize_solve(fund: str, payload: dict | None = None):
+    """Black-Litterman constrained mean-variance solve. Body: {views:
+    [{t, q(%), conf}], max_pos(%), erp(%)}. Returns proposed weights, trades,
+    before/after stats and the constrained efficient frontier."""
+    name, _ = _fund_name(fund)
+    if not name:
+        raise HTTPException(404, f"unknown fund {fund}")
+    p = payload or {}
+    views = [{"t": str(v.get("t", "")).upper(), "q": float(v.get("q", 0)) / 100,
+              "conf": v.get("conf", "med")}
+             for v in (p.get("views") or []) if v.get("t")]
+    max_pos = min(max(float(p.get("max_pos", 10)) / 100, 0.02), 0.5)
+    erp = min(max(float(p.get("erp", 5)) / 100, 0.005), 0.15)
+    conn = _conn()
+    try:
+        return solve_optimizer(CFG, conn, name, views=views, max_pos=max_pos, erp=erp)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     finally:
         conn.close()
 

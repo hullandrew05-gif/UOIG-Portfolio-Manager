@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import load_config  # noqa: E402
 from src.ingest.refresh import refresh  # noqa: E402
+from src.ingest.benchmark_holdings import api_key as av_key  # noqa: E402
+from src.ingest.benchmark_holdings import pull_benchmark_holdings  # noqa: E402
 
 
 def main() -> None:
@@ -23,11 +25,27 @@ def main() -> None:
     ap.add_argument("--years", type=float, help="backfill window in years")
     args = ap.parse_args()
 
-    s = refresh(load_config(), history_years=args.years, full=args.full)
+    cfg = load_config()
+    s = refresh(cfg, history_years=args.years, full=args.full)
     print(f"Refreshed {s['tickers']} tickers: "
           f"{s['prices']} price rows, {s['dividends']} dividends")
     if s["failed"]:
         print(f"  failed ({len(s['failed'])}): {', '.join(s['failed'])}")
+
+    # Benchmark ETF constituents (Alpha Vantage) — powers the optimization
+    # page's active-weight metrics. Skipped quietly when no key is configured
+    # (set ALPHAVANTAGE_API_KEY or alphavantage.key.txt).
+    if av_key():
+        try:
+            b = pull_benchmark_holdings(cfg)
+            print(f"Benchmark holdings: {b['indexes']} indexes, "
+                  f"{b['holdings']} constituents, {b['sectors']} sector rows")
+            if b["failed"]:
+                print(f"  failed: {'; '.join(b['failed'])}")
+        except Exception as exc:  # noqa: BLE001 — never fail the price refresh
+            print(f"Benchmark holdings pull failed: {exc}")
+    else:
+        print("Benchmark holdings skipped (no Alpha Vantage key)")
 
 
 if __name__ == "__main__":
