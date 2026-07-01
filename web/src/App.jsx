@@ -298,9 +298,23 @@ export default class App extends React.Component {
       })
     // Re-render once a minute so the markets-open badge and date stay current.
     this._clock = setInterval(() => this.forceUpdate(), 30000)
+    // Poll live prices while the market is open (backend refreshes quotes on a
+    // background thread; everything else is nightly). No-op when closed.
+    this._dataPoll = setInterval(() => {
+      if (this.state.auth && this.state.data && this._marketStatus().open) this._refreshData()
+    }, 45000)
   }
 
-  componentWillUnmount() { if (this._clock) clearInterval(this._clock) }
+  componentWillUnmount() {
+    if (this._clock) clearInterval(this._clock)
+    if (this._dataPoll) clearInterval(this._dataPoll)
+  }
+
+  // Refetch portfolio data in place (live prices) without resetting the view —
+  // only the `data` slice changes, so the selected fund/tab/series are preserved.
+  _refreshData() {
+    getData().then((data) => this.setState({ data })).catch(() => {})
+  }
 
   // Resolve an invitation token to the invitee's email + state for the accept page.
   _loadInvitation(token) {

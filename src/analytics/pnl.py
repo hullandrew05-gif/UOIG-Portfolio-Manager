@@ -44,6 +44,19 @@ def _latest_two(conn: sqlite3.Connection) -> pd.DataFrame:
         if tk not in res.index:
             res.loc[tk] = {"price": close, "prev_close": close}
 
+    # Live intraday override: a fresh latest quote from the background poller
+    # (src.ingest.live_prices) wins over the nightly DB close so spot price, day
+    # change, weights and AUM are current. Quotes go stale outside market hours,
+    # so this is a no-op when the market is closed (DB close is used instead).
+    try:
+        from src.ingest.live_prices import overrides as _live_overrides
+        for tk, q in _live_overrides().items():
+            if tk in res.index:
+                res.loc[tk, "price"] = q["price"]
+                res.loc[tk, "prev_close"] = q["prev_close"]
+    except Exception:  # noqa: BLE001 — analytics must not depend on the poller
+        pass
+
     return res.reset_index()
 
 
