@@ -68,8 +68,8 @@ def build_terminal_data(cfg: dict, conn: sqlite3.Connection) -> dict:
     fund_map = {f["name"]: f["benchmark"] for f in cfg["funds"]}
 
     funda = {r[0]: r for r in conn.execute(
-        "SELECT ticker, gics_sector, pe, pb, market_cap, week52_low, week52_high, description "
-        "FROM fundamentals").fetchall()}
+        "SELECT ticker, gics_sector, pe, pb, market_cap, week52_low, week52_high, "
+        "description, ev_ebitda FROM fundamentals").fetchall()}
 
     rf = period_return(pf, (cfg.get("risk") or {}).get("risk_free", "BIL"), "1Y") or 0.04
 
@@ -90,6 +90,7 @@ def build_terminal_data(cfg: dict, conn: sqlite3.Connection) -> dict:
             "mtd": _clean((mtd_return(pf, r.ticker) or 0) * 100),
             "pe": _clean(fd[2]) if fd else None,
             "pb": _clean(fd[3]) if fd else None,
+            "evEbitda": _clean(fd[8]) if fd else None,
             "dy": _clean(div_yield_ttm(conn, r.ticker, px)),
             "beta": _clean(r.beta),
             "mc": _clean(fd[4] / 1e9) if fd and fd[4] else None,   # $B

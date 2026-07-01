@@ -50,11 +50,12 @@ def pull_fundamentals(cfg: dict, conn: sqlite3.Connection | None = None,
             continue
         conn.execute(
             db.upsert_sql(conn, "fundamentals",
-                          ["ticker", "gics_sector", "pe", "pb", "market_cap",
+                          ["ticker", "gics_sector", "pe", "pb", "ev_ebitda", "market_cap",
                            "week52_low", "week52_high", "description", "updated"], ["ticker"]),
             (t, info.get("sector"),
              _f(info.get("forwardPE") or info.get("trailingPE")),
-             _f(info.get("priceToBook")), _f(info.get("marketCap")),
+             _f(info.get("priceToBook")), _f(info.get("enterpriseToEbitda")),
+             _f(info.get("marketCap")),
              _f(info.get("fiftyTwoWeekLow")), _f(info.get("fiftyTwoWeekHigh")),
              (info.get("longBusinessSummary") or "")[:600], today),
         )

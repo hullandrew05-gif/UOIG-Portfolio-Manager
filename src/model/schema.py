@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS fundamentals (
     gics_sector  TEXT,
     pe           REAL,   -- forward P/E (falls back to trailing)
     pb           REAL,   -- price / book
+    ev_ebitda    REAL,   -- enterprise value / EBITDA
     market_cap   REAL,   -- USD
     week52_low   REAL,
     week52_high  REAL,
@@ -102,10 +103,28 @@ CREATE TABLE IF NOT EXISTS fundamentals (
     updated      TEXT,
     FOREIGN KEY (ticker) REFERENCES securities (ticker)
 );
+
+CREATE TABLE IF NOT EXISTS benchmark_holdings (
+    index_ticker TEXT,    -- the benchmark ETF (IWV, IWM, ...)
+    ticker       TEXT,    -- a constituent's ticker
+    weight       REAL,    -- constituent weight in the index (fraction, 0-1)
+    sector       TEXT,    -- raw GICS sector from the provider (uppercase)
+    updated      TEXT,
+    PRIMARY KEY (index_ticker, ticker)
+);
+
+CREATE TABLE IF NOT EXISTS benchmark_sectors (
+    index_ticker TEXT,    -- the benchmark ETF (IWV, IWM, ...)
+    sector       TEXT,    -- raw GICS sector name from the provider (uppercase)
+    weight       REAL,    -- sector weight in the index (fraction, 0-1)
+    updated      TEXT,
+    PRIMARY KEY (index_ticker, sector)
+);
 """
 
 _TABLES = [
-    "import_meta", "fundamentals", "nav_history", "benchmarks", "dividends",
+    "import_meta", "fundamentals", "benchmark_holdings", "benchmark_sectors",
+    "nav_history", "benchmarks", "dividends",
     "prices", "transactions", "holdings", "securities",
 ]
 
@@ -137,8 +156,31 @@ def create_schema(conn) -> None:
         finally:
             cur.close()
         conn.commit()
+        _migrate(conn)
         return
     conn.executescript(SCHEMA)
+    conn.commit()
+    _migrate(conn)
+
+
+# Columns added after the initial schema shipped. CREATE TABLE IF NOT EXISTS
+# leaves existing tables untouched, so add any missing columns idempotently.
+_ADDED_COLUMNS = [("fundamentals", "ev_ebitda", "REAL")]
+
+
+def _migrate(conn) -> None:
+    pg = _db.is_pg(conn)
+    cur = conn.cursor()
+    try:
+        for table, col, typ in _ADDED_COLUMNS:
+            if pg:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {typ}")
+            else:
+                have = {r[1] for r in cur.execute(f"PRAGMA table_info({table})")}
+                if col not in have:
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+    finally:
+        cur.close()
     conn.commit()
 
 

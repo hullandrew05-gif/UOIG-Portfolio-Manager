@@ -1,5 +1,5 @@
 import React from 'react'
-import { getData, getSeries, getFundSeries, getSectorSeries, getStock, getPredictions, getThesis, postChat, runAgent, getAgentRun, searchTickers, getQuote, getHolders, getMe, logout, loginUrl, sendInvite, passwordLogin, requestPasswordReset, confirmPasswordReset, verifyEmail, getInvitation, acceptPassword } from './api.js'
+import { getData, getSeries, getFundSeries, getSectorSeries, getStock, getPredictions, getThesis, postChat, runAgent, getAgentRun, searchTickers, getQuote, getHolders, getOptimizeDiagnostics, getMe, logout, loginUrl, sendInvite, passwordLogin, requestPasswordReset, confirmPasswordReset, verifyEmail, getInvitation, acceptPassword } from './api.js'
 
 // UOIG sector taxonomy: the five groups the club uses, each rolling up one or
 // more yfinance GICS sectors. Order here is the board's column order.
@@ -270,6 +270,9 @@ export default class App extends React.Component {
       theses: {},  // cache: ticker -> {thesis} | 'loading' | 'error'
       quotes: {},  // cache: ticker -> overview {t,n,s,px,...} | 'loading' | 'error' (off-portfolio names)
       holders: {},  // cache: ticker -> [{holder,pct,shares,value}] | 'loading' | 'error' (top institutional)
+      optimizeFund: null,  // selected fund key on the Optimize page (defaults to first fund)
+      optimizeTab: 'diagnostics',  // diagnostics | whatif | optimizer
+      optimizeDiag: {},  // cache: fundKey -> diagnostics payload | 'loading' | 'error'
       searchQ: '', searchResults: [], searchOpen: false, searchActive: -1,
     }
     this._searchSeq = 0
@@ -485,6 +488,8 @@ export default class App extends React.Component {
     if (this.state.view === 'sector' &&
         (prev.view !== 'sector' || prev.sector !== this.state.sector ||
          prev.sectorPeriod !== this.state.sectorPeriod)) this._ensureSectorSeries()
+    if (this.state.view === 'optimize' &&
+        (prev.view !== 'optimize' || prev.optimizeFund !== this.state.optimizeFund)) this._ensureOptimizeDiag()
     const pl = (prev.chat && prev.chat.length) || 0
     if (this.chatRef.current && (pl !== this.state.chat.length || prev.loading !== this.state.loading))
       this.chatRef.current.scrollTop = this.chatRef.current.scrollHeight
@@ -707,6 +712,16 @@ export default class App extends React.Component {
       .catch(() => this.setState((st) => ({ holders: { ...st.holders, [tk]: 'error' } })))
   }
 
+  // Per-fund optimization diagnostics (active risk vs benchmark) for the Optimize page.
+  _ensureOptimizeDiag() {
+    const key = this.state.optimizeFund || (this.fundKeys && this.fundKeys[0])
+    if (!key || this.state.optimizeDiag[key]) return
+    this.setState((st) => ({ optimizeDiag: { ...st.optimizeDiag, [key]: 'loading' } }))
+    getOptimizeDiagnostics(key)
+      .then((res) => this.setState((st) => ({ optimizeDiag: { ...st.optimizeDiag, [key]: res } })))
+      .catch(() => this.setState((st) => ({ optimizeDiag: { ...st.optimizeDiag, [key]: 'error' } })))
+  }
+
   _ensureThesis() {
     const { view, ticker, stkTab } = this.state
     if (view !== 'stock' || stkTab !== 'thesis' || !ticker || this.state.theses[ticker]) return
@@ -761,6 +776,7 @@ export default class App extends React.Component {
     if (name === 'funds') return mk([React.createElement('rect', { key: 1, x: 1, y: 8, width: 3.4, height: 7, rx: 1 }), React.createElement('rect', { key: 2, x: 6.3, y: 4, width: 3.4, height: 11, rx: 1 }), React.createElement('rect', { key: 3, x: 11.6, y: 1, width: 3.4, height: 14, rx: 1 })], true)
     if (name === 'stocks') return mk([React.createElement('polyline', { key: 1, points: '1,11 5.5,6.5 9,9 15,2.5' })], false)
     if (name === 'sectors') return mk([React.createElement('circle', { key: 1, cx: 8, cy: 8, r: 6, style: { fill: 'none', stroke: 'currentColor', strokeWidth: 1.8 } }), React.createElement('path', { key: 2, d: 'M8 2 A6 6 0 0 1 13.2 8 L8 8 Z', style: { fill: 'currentColor', stroke: 'none' } })], false)
+    if (name === 'optimize') return mk([React.createElement('line', { key: 1, x1: 3, y1: 2, x2: 3, y2: 14 }), React.createElement('line', { key: 2, x1: 8, y1: 2, x2: 8, y2: 14 }), React.createElement('line', { key: 3, x1: 13, y1: 2, x2: 13, y2: 14 }), React.createElement('circle', { key: 4, cx: 3, cy: 5, r: 1.6, style: { fill: 'currentColor' } }), React.createElement('circle', { key: 5, cx: 8, cy: 10, r: 1.6, style: { fill: 'currentColor' } }), React.createElement('circle', { key: 6, cx: 13, cy: 6, r: 1.6, style: { fill: 'currentColor' } })], false)
     return null
   }
 
@@ -1026,6 +1042,7 @@ export default class App extends React.Component {
             {v.isSectors && this._renderSectors(v)}
             {v.isStock && (v.stk ? this._renderStock(v) : this._renderStockMsg(v))}
             {v.isSector && v.sec && this._renderSector(v)}
+            {v.isOptimize && this._renderOptimize(v)}
           </div>
 
         </div>
@@ -1609,6 +1626,140 @@ export default class App extends React.Component {
     )
   }
 
+  _renderOptimize(v) {
+    const st = this.state, F = this.funds
+    const key = st.optimizeFund || this.fundKeys[0]
+    const f = F[key]
+    const d = st.optimizeDiag[key]
+    const tab = st.optimizeTab || 'diagnostics'
+    const loading = d === 'loading' || d === undefined
+    const errored = d === 'error'
+    const data = (!loading && !errored) ? d : null
+    const tabs = [['diagnostics', 'Diagnostics'], ['whatif', 'What-if'], ['optimizer', 'Optimizer']]
+    return (
+      <div style={s('padding:16px;display:flex;flex-direction:column;gap:14px;')}>
+        <div style={s('display:flex;justify-content:space-between;align-items:flex-start;')}>
+          <div>
+            <div style={s("font:600 9px 'IBM Plex Sans';letter-spacing:.14em;text-transform:uppercase;color:#6b7794;")}>Optimization</div>
+            <div style={s("font:600 21px 'IBM Plex Sans';color:#e8edf7;margin-top:3px;")}>{tab === 'whatif' ? 'What-if' : tab === 'optimizer' ? 'Optimizer' : 'Diagnostics'}</div>
+          </div>
+          <div style={s('display:flex;align-items:center;gap:10px;')}>
+            <div style={s('display:flex;background:#0a0f1a;border:1px solid #1d2840;border-radius:8px;padding:3px;')}>
+              {this.fundKeys.map((k) => {
+                const on = k === key
+                return <span key={k} onClick={() => this.setState({ optimizeFund: k })} style={{ ...s("padding:5px 13px;border-radius:5px;cursor:pointer;font:600 11px 'IBM Plex Sans';"), background: on ? '#13203a' : 'transparent', color: on ? F[k].color : '#6b7794', border: on ? '1px solid #28406e' : '1px solid transparent' }}>{F[k].name}</span>
+              })}
+            </div>
+            <div style={s('text-align:right;')}>
+              <div style={s("font-family:'IBM Plex Mono';font-size:11px;color:#9aa7c2;")}>vs {data ? data.benchmark : (f.benchShort || '—')}</div>
+              <div style={s("font-family:'IBM Plex Mono';font-size:9px;color:#5d6a85;margin-top:2px;")}>{data ? (data.overlay + '% benchmark overlay') : 'Sample cov · 3Y daily'}</div>
+            </div>
+          </div>
+        </div>
+        <div style={s('display:flex;gap:3px;border-bottom:1px solid #1d2840;')}>
+          {tabs.map(([k, label]) => (
+            <span key={k} onClick={() => this.setState({ optimizeTab: k })} style={{ ...s("padding:9px 15px;font-size:11.5px;font-family:'IBM Plex Sans';cursor:pointer;margin-bottom:-1px;"), fontWeight: k === tab ? 600 : 500, color: k === tab ? '#e8edf7' : '#6b7794', borderBottom: k === tab ? '2px solid #5a93f9' : '2px solid transparent' }}>{label}</span>
+          ))}
+        </div>
+        {loading && <div style={s("background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:30px;display:flex;justify-content:center;color:#5d6a85;font:500 11px 'IBM Plex Sans';")}>Computing active-risk diagnostics…</div>}
+        {errored && <div style={s("background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:30px;display:flex;justify-content:center;color:#8290ad;font:500 11px 'IBM Plex Sans';")}>Could not load diagnostics for {f.name}.</div>}
+        {data && tab === 'diagnostics' && this._renderOptimizeDiag(data)}
+        {data && tab === 'whatif' && this._optimizeStub('What-if sandbox', 'Weight sliders that recompute tracking error and active share live as you trim or add to positions. This is the next tab we build.')}
+        {data && tab === 'optimizer' && this._optimizeStub('Black-Litterman optimizer', 'Market-implied returns overlaid with the club’s analyst views, solved under long-only and turnover constraints. Phase 2.')}
+      </div>
+    )
+  }
+
+  _optimizeStub(title, msg) {
+    return (
+      <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:30px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;')}>
+        <span style={s('font-size:22px;color:#3c4a66;')}>⊟</span>
+        <div style={s("font:600 12.5px 'IBM Plex Sans';color:#cdd6e8;")}>{title}</div>
+        <div style={s("font:400 11px/1.6 'IBM Plex Sans';color:#8290ad;max-width:420px;")}>{msg}</div>
+      </div>
+    )
+  }
+
+  _renderOptimizeDiag(d) {
+    const k = d.kpis, c = d.concentration
+    const pct = (x, dp) => (x == null ? '—' : x.toFixed(dp == null ? 1 : dp) + '%')
+    const kpis = [
+      { l: 'Tracking Error', v: pct(k.tracking_error, 2), sub: 'active risk, ann.', accent: '#5a93f9' },
+      { l: 'Active Share', v: pct(k.active_share, 1), sub: 'vs benchmark', accent: '#5a93f9' },
+      { l: 'Beta vs ' + d.benchmark, v: k.beta == null ? '—' : k.beta.toFixed(2), sub: '3Y daily', accent: '#2a3a5c' },
+      { l: 'Portfolio Vol', v: pct(k.vol, 1), sub: 'total, ann.', accent: '#2a3a5c' },
+    ]
+    const rows = (d.risk_contribution || []).slice(0, 12)
+    const maxRC = Math.max.apply(null, rows.map((r) => Math.abs(r.risk_contrib)).concat([1]))
+    const tilts = d.sector_tilts || []
+    const maxTilt = Math.max.apply(null, tilts.map((t) => Math.abs(t.active)).concat([1]))
+    return (
+      <React.Fragment>
+        <div style={s('display:grid;grid-template-columns:repeat(4,1fr);gap:11px;')}>
+          {kpis.map((t, i) => (
+            <div key={i} style={{ ...s('background:#0e1422;border:1px solid #1d2840;border-radius:0 8px 8px 0;padding:11px 13px;'), borderLeft: '3px solid ' + t.accent }}>
+              <div style={s("font:600 8.5px 'IBM Plex Sans';letter-spacing:.05em;text-transform:uppercase;color:#6b7794;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{t.l}</div>
+              <div style={s("font-family:'IBM Plex Mono';font-size:20px;margin-top:5px;color:#e8edf7;")}>{t.v}</div>
+              <div style={s('font-size:9px;color:#5d6a85;margin-top:2px;')}>{t.sub}</div>
+            </div>
+          ))}
+        </div>
+        <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
+          <div style={s('display:flex;justify-content:space-between;align-items:center;margin-bottom:11px;')}>
+            <span style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;")}>Active Risk Contribution</span>
+            <span style={s('font-size:9.5px;color:#5d6a85;')}>% of tracking error, by active bet</span>
+          </div>
+          <div style={s("display:grid;grid-template-columns:52px 1fr 62px 60px 56px 92px;gap:8px;font:600 8.5px 'IBM Plex Sans';letter-spacing:.05em;text-transform:uppercase;color:#6b7794;padding-bottom:7px;border-bottom:1px solid #1d2840;")}>
+            <span>Ticker</span><span>Name</span><span style={s('text-align:right;')}>Port Wt</span><span style={s('text-align:right;')}>Bench</span><span style={s('text-align:right;')}>Active</span><span style={s('text-align:right;')}>Risk Contrib</span>
+          </div>
+          {rows.map((r, i) => {
+            const col = r.active_w >= 0 ? '#21d07a' : '#ff5666'
+            return (
+              <div key={i} style={s('display:grid;grid-template-columns:52px 1fr 62px 60px 56px 92px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #131c2f;')}>
+                <span style={s("font-family:'IBM Plex Mono';font-weight:500;font-size:12px;color:#e8edf7;")}>{r.t}</span>
+                <span style={s("font:400 10.5px 'IBM Plex Sans';color:#8290ad;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;")}>{r.name}</span>
+                <span style={s("font-family:'IBM Plex Mono';font-size:11px;text-align:right;color:#cdd6e8;")}>{r.port_w.toFixed(1)}</span>
+                <span style={s("font-family:'IBM Plex Mono';font-size:11px;text-align:right;color:#6b7794;")}>{r.bench_w.toFixed(2)}</span>
+                <span style={{ ...s("font-family:'IBM Plex Mono';font-size:11px;text-align:right;"), color: col }}>{this._sign(r.active_w, 1)}</span>
+                <span style={s('display:flex;align-items:center;gap:6px;justify-content:flex-end;')}>
+                  <span style={{ ...s('height:6px;border-radius:3px;opacity:.8;'), width: Math.max(4, Math.abs(r.risk_contrib) / maxRC * 60) + 'px', background: col }}></span>
+                  <span style={s("font-family:'IBM Plex Mono';font-size:11px;color:#cdd6e8;width:34px;text-align:right;")}>{Math.round(r.risk_contrib)}%</span>
+                </span>
+              </div>
+            )
+          })}
+        </div>
+        <div style={s('display:grid;grid-template-columns:1fr 1fr;gap:14px;')}>
+          <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
+            <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;margin-bottom:13px;")}>Active Sector Tilts</div>
+            {tilts.map((t, i) => {
+              const ow = t.active >= 0, col = ow ? '#21d07a' : '#ff5666', w = Math.abs(t.active) / maxTilt * 50
+              return (
+                <div key={i} style={s('display:grid;grid-template-columns:74px 1fr 44px;gap:8px;align-items:center;margin-bottom:9px;')}>
+                  <span style={s("font:400 10.5px 'IBM Plex Sans';color:#9aa7c2;")}>{t.group}</span>
+                  <div style={s('position:relative;height:14px;display:flex;align-items:center;')}>
+                    <div style={s('position:absolute;left:50%;top:0;bottom:0;width:1px;background:#2a3a5c;')}></div>
+                    <div style={{ ...s('position:absolute;left:50%;height:9px;border-radius:2px;opacity:.85;'), background: col, width: w + '%', transform: ow ? 'none' : 'translateX(-100%)' }}></div>
+                  </div>
+                  <span style={{ ...s("font-family:'IBM Plex Mono';font-size:11px;text-align:right;"), color: col }}>{this._sign(t.active, 1)}</span>
+                </div>
+              )
+            })}
+            <div style={s('font-size:9px;color:#5d6a85;margin-top:10px;')}>Portfolio weight minus {d.benchmark} weight, in pp.</div>
+          </div>
+          <div style={s('background:#0e1422;border:1px solid #1d2840;border-radius:9px;padding:15px;')}>
+            <div style={s("font:600 10px 'IBM Plex Sans';letter-spacing:.08em;text-transform:uppercase;color:#7e8aa6;margin-bottom:13px;")}>Concentration <span style={s("font-family:'IBM Plex Mono';font-weight:400;color:#5d6a85;text-transform:none;letter-spacing:0;")}>· stock sleeve</span></div>
+            <div style={s('display:flex;flex-direction:column;gap:11px;')}>
+              {[['Stock picks', c.holdings], ['Effective # names', c.effective_n], ['Top-5 weight', c.top5 + '%'], ['HHI', c.hhi]].map((r, i) => (
+                <div key={i} style={s('display:flex;justify-content:space-between;align-items:baseline;')}><span style={s('font-size:11px;color:#9aa7c2;')}>{r[0]}</span><span style={s("font-family:'IBM Plex Mono';font-size:15px;color:#e8edf7;")}>{r[1]}</span></div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </React.Fragment>
+    )
+  }
+
   _renderSector(v) {
     const sec = v.sec
     return (
@@ -1695,10 +1846,11 @@ export default class App extends React.Component {
     v.asOf = 'AS OF ' + mkt.date
     v.isDashboard = st.view === 'dashboard'; v.isStocks = st.view === 'stocks'
     v.isSectors = st.view === 'sectors'; v.isStock = st.view === 'stock'; v.isSector = st.view === 'sector'
+    v.isOptimize = st.view === 'optimize'
     v.fundAName = F[fundA].name; v.fundBName = F[fundB].name
 
-    const navDef = [['funds', 'Funds', 'dashboard'], ['stocks', 'Stocks', 'stocks'], ['sectors', 'Sectors', 'sectors']]
-    const activeMap = { dashboard: ['funds'], stocks: ['stocks'], sectors: ['sectors'], stock: ['stocks'], sector: ['sectors'] }
+    const navDef = [['funds', 'Funds', 'dashboard'], ['stocks', 'Stocks', 'stocks'], ['sectors', 'Sectors', 'sectors'], ['optimize', 'Optimize', 'optimize']]
+    const activeMap = { dashboard: ['funds'], stocks: ['stocks'], sectors: ['sectors'], stock: ['stocks'], sector: ['sectors'], optimize: ['optimize'] }
     v.nav = navDef.map(([id, label, go]) => {
       const active = (activeMap[st.view] || []).indexOf(id) >= 0
       return { key: id, label, icon: this._icon(id, active), bg: active ? '#13203a' : 'transparent', color: active ? '#5a93f9' : '#5d6a85', on: () => this._go(go) }

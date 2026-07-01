@@ -45,6 +45,7 @@ from src.ingest.predictions import stock_predictions  # noqa: E402
 from src.ingest.thesis import stock_thesis  # noqa: E402
 from src.assistant import answer as llm_answer, api_key as llm_key  # noqa: E402
 from src.analytics.risk import daily_returns_matrix  # noqa: E402
+from src.analytics.optimize import fund_diagnostics  # noqa: E402
 from src.analytics.series import (price_frame, period_return, synthetic_index,  # noqa: E402
                                   ticker_series, trailing_return)
 from src.config import db_path, load_config  # noqa: E402
@@ -434,6 +435,20 @@ def holders(ticker: str):
         return {"ticker": ticker.upper(), "holders": institutional_holders(ticker)}
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(502, f"holders fetch failed: {exc}")
+
+
+@app.get("/api/optimize/diagnostics/{fund}")
+def optimize_diagnostics(fund: str):
+    """Per-fund optimization diagnostics (active risk vs the benchmark): tracking
+    error, active share, beta, active risk contribution, sector tilts, concentration."""
+    name, _ = _fund_name(fund)
+    if not name:
+        raise HTTPException(404, f"unknown fund {fund}")
+    conn = _conn()
+    try:
+        return fund_diagnostics(CFG, conn, name)
+    finally:
+        conn.close()
 
 
 @app.get("/api/fund-series/{fund}")
