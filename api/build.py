@@ -48,6 +48,8 @@ def _port_daily(rets: pd.DataFrame, weights: dict) -> pd.Series:
 
 def _synth_period_ret(rets: pd.DataFrame, weights: dict, period: str):
     """Reconstructed current-weights fund total return over the period."""
+    if rets.empty:
+        return None
     start = pd.Timestamp(_pstart(rets, period))
     s = _port_daily(rets.loc[rets.index >= start, :], weights)
     return ((1 + s).prod() - 1) if len(s) else None
